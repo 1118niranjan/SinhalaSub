@@ -20,6 +20,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import webbrowser
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tkinter import colorchooser, filedialog, messagebox, ttk
@@ -593,7 +594,7 @@ class SinhalaSubApp:
     def __init__(self, root):
         self.root = root
         self.claude_path = find_claude()
-        self.os_key = opensubtitles_key()
+        self.os_key = providers.load_secrets().get("opensubtitles", "") or opensubtitles_key()
         self.subs = None
         self.texts = None
         self.current_input = None
@@ -635,6 +636,8 @@ class SinhalaSubApp:
 
         main = ttk.Frame(root, padding=16)
         main.pack(fill="both", expand=True)
+        self.main = main
+        self._os_panel = None
 
         ttk.Label(main, text="SinhalaSub", style="Header.TLabel").pack(anchor="w")
         self.subtitle_lbl = ttk.Label(
@@ -799,6 +802,14 @@ class SinhalaSubApp:
             "local model.\n\n"
             "Created by NLK")
 
+    # Where each provider hands out an API key (opened by the "Get a key" button).
+    KEY_URLS = {
+        "anthropic": "https://console.anthropic.com/settings/keys",
+        "gemini": "https://aistudio.google.com/apikey",
+        "openai": "https://platform.openai.com/api-keys",
+    }
+    OS_KEY_URL = "https://www.opensubtitles.com/en/consumers"
+
     def open_provider_settings(self):
         desc0 = providers.provider_by_key(self.provider_key)
         secrets = providers.load_secrets()
@@ -812,35 +823,55 @@ class SinhalaSubApp:
         frm = ttk.Frame(win, padding=16)
         frm.pack(fill="both", expand=True)
 
+        def current_desc():
+            return next(p for p in providers.PROVIDERS if p["label"] == prov_var.get())
+
         ttk.Label(frm, text="Provider", style="Dim.TLabel").grid(row=0, column=0, sticky="w")
         prov_var = tk.StringVar(value=desc0["label"])
         labels = [p["label"] for p in providers.PROVIDERS]
         ttk.Combobox(frm, textvariable=prov_var, values=labels, state="readonly",
-                     width=24).grid(row=0, column=1, sticky="ew", pady=4)
+                     width=24).grid(row=0, column=1, columnspan=2, sticky="ew", pady=4)
 
         key_var = tk.StringVar(value=secrets.get(desc0["key"], ""))
         base_var = tk.StringVar(value=pconf.get("base_url") or desc0.get("default_base_url") or "")
         model_var = tk.StringVar(value=pconf.get("model") or desc0["default_model"])
 
         ttk.Label(frm, text="API key", style="Dim.TLabel").grid(row=1, column=0, sticky="w")
-        key_entry = ttk.Entry(frm, textvariable=key_var, show="•", width=36)
+        key_entry = ttk.Entry(frm, textvariable=key_var, show="•", width=30)
         key_entry.grid(row=1, column=1, sticky="ew", pady=4)
+        get_key_btn = ttk.Button(
+            frm, text="Get a key ↗",
+            command=lambda: webbrowser.open(self.KEY_URLS.get(current_desc()["key"], "")))
+        get_key_btn.grid(row=1, column=2, sticky="w", padx=(6, 0))
+
         ttk.Label(frm, text="Base URL", style="Dim.TLabel").grid(row=2, column=0, sticky="w")
         base_entry = ttk.Entry(frm, textvariable=base_var, width=36)
-        base_entry.grid(row=2, column=1, sticky="ew", pady=4)
+        base_entry.grid(row=2, column=1, columnspan=2, sticky="ew", pady=4)
         ttk.Label(frm, text="Model", style="Dim.TLabel").grid(row=3, column=0, sticky="w")
-        ttk.Entry(frm, textvariable=model_var, width=36).grid(row=3, column=1, sticky="ew", pady=4)
+        ttk.Entry(frm, textvariable=model_var, width=36).grid(
+            row=3, column=1, columnspan=2, sticky="ew", pady=4)
 
-        status = ttk.Label(frm, text="", style="Dim.TLabel", wraplength=320)
-        status.grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Separator(frm, orient="horizontal").grid(
+            row=4, column=0, columnspan=3, sticky="ew", pady=(10, 6))
+        ttk.Label(frm, text="OpenSubtitles key", style="Dim.TLabel").grid(
+            row=5, column=0, sticky="w")
+        os_key_var = tk.StringVar(value=secrets.get("opensubtitles", ""))
+        ttk.Entry(frm, textvariable=os_key_var, show="•", width=30).grid(
+            row=5, column=1, sticky="ew", pady=4)
+        ttk.Button(frm, text="Get a key ↗",
+                   command=lambda: webbrowser.open(self.OS_KEY_URL)).grid(
+            row=5, column=2, sticky="w", padx=(6, 0))
+        ttk.Label(frm, text="(optional — enables the movie search panel)",
+                  style="Dim.TLabel").grid(row=6, column=1, columnspan=2, sticky="w")
 
-        def current_desc():
-            return next(p for p in providers.PROVIDERS if p["label"] == prov_var.get())
+        status = ttk.Label(frm, text="", style="Dim.TLabel", wraplength=340)
+        status.grid(row=7, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
         def sync_fields(*_):
             d = current_desc()
             is_cli = d["key"] == "cli"
             key_entry.configure(state=("disabled" if is_cli else "normal"))
+            get_key_btn.configure(state=("disabled" if is_cli else "normal"))
             base_entry.configure(state=("normal" if d["key"] == "openai" else "disabled"))
             saved = (self.settings.get("providers") or {}).get(d["key"], {})
             key_var.set(providers.load_secrets().get(d["key"], ""))
@@ -873,13 +904,21 @@ class SinhalaSubApp:
             sec = providers.load_secrets()
             if d["needs_key"]:
                 sec[d["key"]] = key_var.get().strip()
-                providers.save_secrets(sec)
+            os_val = os_key_var.get().strip()
+            if os_val:
+                sec["opensubtitles"] = os_val
+            elif "opensubtitles" in sec:
+                del sec["opensubtitles"]
+            providers.save_secrets(sec)
+            self.os_key = os_val or opensubtitles_key()
+            if self.os_key and self._os_panel is None:
+                self._build_opensubtitles(self.main)
             self._menu_provider.set(d["key"])
             self._refresh_engine_header()
             win.destroy()
 
         btns = ttk.Frame(frm)
-        btns.grid(row=5, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        btns.grid(row=8, column=0, columnspan=3, sticky="e", pady=(12, 0))
         ttk.Button(btns, text="Test connection", command=do_test).pack(side="left")
         ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=8)
         ttk.Button(btns, text="Save", style="Accent.TButton",
@@ -907,8 +946,11 @@ class SinhalaSubApp:
         self._persist()
 
     def _build_opensubtitles(self, parent):
+        if self._os_panel is not None:
+            return
         box = ttk.LabelFrame(parent, text=" OpenSubtitles search (optional) ", padding=10)
         box.pack(fill="x", pady=(12, 0))
+        self._os_panel = box
         row = ttk.Frame(box)
         row.pack(fill="x")
         self.os_query = tk.StringVar()
