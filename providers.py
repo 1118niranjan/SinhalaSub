@@ -166,3 +166,37 @@ class AnthropicProvider(Provider):
         data = resp.json()
         return "".join(b.get("text", "") for b in data.get("content", [])
                        if b.get("type") == "text")
+
+
+class GeminiProvider(Provider):
+    """Google Gemini native generateContent API."""
+
+    BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+
+    def __init__(self, model, api_key, max_tokens=8000):
+        self.model = model
+        self.api_key = api_key
+        self.max_tokens = max_tokens
+
+    def available(self):
+        return bool(self.api_key)
+
+    def translate(self, prompt, stdin_text, timeout):
+        import requests
+        url = "%s/%s:generateContent?key=%s" % (self.BASE, self.model, self.api_key)
+        body = {
+            "system_instruction": {"parts": [{"text": prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": stdin_text}]}],
+            "generationConfig": {"maxOutputTokens": self.max_tokens},
+        }
+        resp = requests.post(url, json=body, timeout=timeout)
+        if resp.status_code != 200:
+            raise RuntimeError("Gemini API error %d: %s"
+                               % (resp.status_code, (resp.text or "")[:300]))
+        data = resp.json()
+        cands = data.get("candidates", [])
+        if not cands:
+            raise RuntimeError("Gemini returned no candidates: %s"
+                               % (resp.text or "")[:200])
+        parts = cands[0].get("content", {}).get("parts", [])
+        return "".join(p.get("text", "") for p in parts)
