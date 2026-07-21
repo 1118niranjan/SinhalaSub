@@ -251,12 +251,13 @@ def translate_batch(subs, batch, provider, log=None, cancel=None, skip=None):
 
 
 def translate_all(subs, provider, progress=None, log=None, workers=None,
-                  cancel=None, initial=None, on_batch=None):
+                  cancel=None, initial=None, on_batch=None, batch_size=None):
     """Translate every cue; returns a list of Sinhala texts aligned to subs order.
 
-    provider  - a providers.Provider (CLI, Anthropic, Gemini, or OpenAI-compatible)
-    initial   - {position: text} already translated (resume); those batches skip
-    on_batch  - called with each finished batch dict (used for checkpointing)
+    provider   - a providers.Provider (CLI, Anthropic, Gemini, or OpenAI-compatible)
+    initial    - {position: text} already translated (resume); those batches skip
+    on_batch   - called with each finished batch dict (used for checkpointing)
+    batch_size - cues per request (larger = fewer requests, helps free-tier caps)
     progress(batches_done, batches_total) is called after each batch.
     """
     stop = cancel if cancel is not None else threading.Event()
@@ -267,7 +268,7 @@ def translate_all(subs, provider, progress=None, log=None, workers=None,
             if 0 <= i < len(texts):
                 texts[i] = t
     todo = []
-    for b in make_batches(len(subs)):
+    for b in make_batches(len(subs), batch_size):
         if any(texts[i] is None for i in b):
             todo.append((b, {i for i in b if texts[i] is not None}))
     if not todo:
@@ -670,6 +671,10 @@ class SinhalaSubApp:
         self.workers_var = tk.StringVar(value=str(self.settings.get("workers", MAX_WORKERS)))
         ttk.Spinbox(opts, from_=1, to=20, textvariable=self.workers_var,
                     width=4, state="readonly").pack(side="left", padx=6)
+        ttk.Label(opts, text="Cues per batch", style="Dim.TLabel").pack(side="left", padx=(18, 0))
+        self.batch_var = tk.StringVar(value=str(self.settings.get("batch_size", BATCH_SIZE)))
+        ttk.Spinbox(opts, from_=10, to=100, increment=5, textvariable=self.batch_var,
+                    width=4, state="readonly").pack(side="left", padx=6)
 
         ttk.Label(main, style="Dim.TLabel", wraplength=660,
                   text="Tip: \"CLI default\" follows your Claude Code /model setting "
@@ -720,6 +725,7 @@ class SinhalaSubApp:
         self._loaded = True
         self.model_var.trace_add("write", self._persist)
         self.workers_var.trace_add("write", self._persist)
+        self.batch_var.trace_add("write", self._persist)
         self.memory_var.trace_add("write", self._persist)
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -734,6 +740,7 @@ class SinhalaSubApp:
         # Merge into self.settings so provider/providers keys survive.
         self.settings["model"] = self.model_var.get()
         self.settings["workers"] = self.workers_var.get()
+        self.settings["batch_size"] = self.batch_var.get()
         self.settings["memory"] = bool(self.memory_var.get())
         self.settings["color_hex"] = self.color_hex
         self.settings["color_name"] = self.color_name.get()
@@ -1046,6 +1053,10 @@ class SinhalaSubApp:
             workers = max(1, min(20, int(self.workers_var.get())))
         except ValueError:
             workers = providers.default_workers(self.provider_key)
+        try:
+            batch_size = max(5, min(100, int(self.batch_var.get())))
+        except ValueError:
+            batch_size = BATCH_SIZE
 
         self.subs = subs
         self.texts = None
@@ -1054,7 +1065,7 @@ class SinhalaSubApp:
         self.t_start = time.time()
         self.eta_target = None
         self.batches_done = 0
-        self.batches_total = len(make_batches(len(subs)))
+        self.batches_total = len(make_batches(len(subs), batch_size))
         self.progress.configure(maximum=self.batches_total, value=0)
         self._busy(True)
         known = len(initial)
@@ -1064,9 +1075,9 @@ class SinhalaSubApp:
         self.running = True
         threading.Thread(
             target=self._worker,
-            args=(subs, path, initial, workers), daemon=True).start()
+            args=(subs, path, initial, workers, batch_size), daemon=True).start()
 
-    def _worker(self, subs, path, initial, workers):
+    def _worker(self, subs, path, initial, workers, batch_size):
         saved = {int(k): v for k, v in (initial or {}).items()}
 
         def on_batch(result):
@@ -1082,7 +1093,7 @@ class SinhalaSubApp:
                 progress=lambda d, t: self.msgs.put(("progress", d, t)),
                 log=lambda m: self.msgs.put(("status", m)),
                 workers=workers, cancel=self.cancel_event,
-                initial=initial, on_batch=on_batch)
+                initial=initial, on_batch=on_batch, batch_size=batch_size)
             self.msgs.put(("done", texts))
         except TranslationCancelled:
             self.msgs.put(("cancelled", len(saved), len(subs)))

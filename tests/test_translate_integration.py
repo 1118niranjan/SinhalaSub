@@ -49,6 +49,15 @@ def test_translate_all_uses_provider_and_aligns(monkeypatch):
     assert prov.calls >= 3  # 7 cues / batch size 3 => 3 batches
 
 
+def test_translate_all_respects_batch_size():
+    subs = _subs(10)
+    prov = FakeProvider()
+    texts = sinhalasub.translate_all(subs, prov, workers=1, batch_size=5)
+    assert prov.calls == 2  # 10 cues / batch size 5 => 2 batches
+    assert len(texts) == 10
+    assert texts[9] == "SI-10"
+
+
 def test_translate_batch_keeps_english_when_provider_returns_nothing():
     subs = _subs(2)
 
