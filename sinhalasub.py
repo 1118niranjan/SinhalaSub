@@ -889,15 +889,32 @@ class SinhalaSubApp:
 
         def do_test():
             d = current_desc()
-            status.configure(text="Testing…")
-            win.update_idletasks()
             prov = providers.make_provider(
                 d["key"], model=model_var.get().strip() or d["default_model"],
                 api_key=key_var.get().strip(),
                 base_url=base_var.get().strip() or d.get("default_base_url"),
                 cli_path=self.claude_path)
-            ok, msg = prov.test()
-            status.configure(text=("✓ " if ok else "✗ ") + msg)
+            status.configure(text="Testing… (up to 30s)")
+
+            def work():
+                try:
+                    ok, msg = prov.test()
+                except Exception as exc:  # noqa: BLE001 - shown to the user
+                    ok, msg = False, str(exc)[:300]
+
+                def show():
+                    try:
+                        status.configure(text=("✓ " if ok else "✗ ") + msg)
+                    except tk.TclError:
+                        pass  # dialog was closed before the result came back
+
+                try:
+                    win.after(0, show)
+                except tk.TclError:
+                    pass
+
+            # Run the network probe off the UI thread so the window stays responsive.
+            threading.Thread(target=work, daemon=True).start()
 
         def do_save():
             d = current_desc()
