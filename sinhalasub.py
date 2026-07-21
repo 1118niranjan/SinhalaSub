@@ -800,8 +800,91 @@ class SinhalaSubApp:
             "Created by NLK")
 
     def open_provider_settings(self):
-        # Replaced with the full dialog in Task 9.
-        pass
+        desc0 = providers.provider_by_key(self.provider_key)
+        secrets = providers.load_secrets()
+        pconf = (self.settings.get("providers") or {}).get(desc0["key"], {})
+
+        win = tk.Toplevel(self.root)
+        win.title("Provider settings")
+        win.configure(bg=BG)
+        win.transient(self.root)
+        win.grab_set()
+        frm = ttk.Frame(win, padding=16)
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(frm, text="Provider", style="Dim.TLabel").grid(row=0, column=0, sticky="w")
+        prov_var = tk.StringVar(value=desc0["label"])
+        labels = [p["label"] for p in providers.PROVIDERS]
+        ttk.Combobox(frm, textvariable=prov_var, values=labels, state="readonly",
+                     width=24).grid(row=0, column=1, sticky="ew", pady=4)
+
+        key_var = tk.StringVar(value=secrets.get(desc0["key"], ""))
+        base_var = tk.StringVar(value=pconf.get("base_url") or desc0.get("default_base_url") or "")
+        model_var = tk.StringVar(value=pconf.get("model") or desc0["default_model"])
+
+        ttk.Label(frm, text="API key", style="Dim.TLabel").grid(row=1, column=0, sticky="w")
+        key_entry = ttk.Entry(frm, textvariable=key_var, show="•", width=36)
+        key_entry.grid(row=1, column=1, sticky="ew", pady=4)
+        ttk.Label(frm, text="Base URL", style="Dim.TLabel").grid(row=2, column=0, sticky="w")
+        base_entry = ttk.Entry(frm, textvariable=base_var, width=36)
+        base_entry.grid(row=2, column=1, sticky="ew", pady=4)
+        ttk.Label(frm, text="Model", style="Dim.TLabel").grid(row=3, column=0, sticky="w")
+        ttk.Entry(frm, textvariable=model_var, width=36).grid(row=3, column=1, sticky="ew", pady=4)
+
+        status = ttk.Label(frm, text="", style="Dim.TLabel", wraplength=320)
+        status.grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+        def current_desc():
+            return next(p for p in providers.PROVIDERS if p["label"] == prov_var.get())
+
+        def sync_fields(*_):
+            d = current_desc()
+            is_cli = d["key"] == "cli"
+            key_entry.configure(state=("disabled" if is_cli else "normal"))
+            base_entry.configure(state=("normal" if d["key"] == "openai" else "disabled"))
+            saved = (self.settings.get("providers") or {}).get(d["key"], {})
+            key_var.set(providers.load_secrets().get(d["key"], ""))
+            base_var.set(saved.get("base_url") or d.get("default_base_url") or "")
+            model_var.set(saved.get("model") or d["default_model"])
+        prov_var.trace_add("write", sync_fields)
+        sync_fields()
+
+        def do_test():
+            d = current_desc()
+            status.configure(text="Testing…")
+            win.update_idletasks()
+            prov = providers.make_provider(
+                d["key"], model=model_var.get().strip() or d["default_model"],
+                api_key=key_var.get().strip(),
+                base_url=base_var.get().strip() or d.get("default_base_url"),
+                cli_path=self.claude_path)
+            ok, msg = prov.test()
+            status.configure(text=("✓ " if ok else "✗ ") + msg)
+
+        def do_save():
+            d = current_desc()
+            self.provider_key = d["key"]
+            self.settings["provider"] = d["key"]
+            provs = dict(self.settings.get("providers") or {})
+            provs[d["key"]] = {"model": model_var.get().strip() or d["default_model"],
+                               "base_url": base_var.get().strip() or d.get("default_base_url")}
+            self.settings["providers"] = provs
+            save_settings(self.settings)
+            sec = providers.load_secrets()
+            if d["needs_key"]:
+                sec[d["key"]] = key_var.get().strip()
+                providers.save_secrets(sec)
+            self._menu_provider.set(d["key"])
+            self._refresh_engine_header()
+            win.destroy()
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=5, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(btns, text="Test connection", command=do_test).pack(side="left")
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=8)
+        ttk.Button(btns, text="Save", style="Accent.TButton",
+                   command=do_save).pack(side="left")
+        frm.columnconfigure(1, weight=1)
 
     # ----- widgets ---------------------------------------------------------
 
