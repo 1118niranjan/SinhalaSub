@@ -869,9 +869,9 @@ class SinhalaSubApp:
 
         def sync_fields(*_):
             d = current_desc()
-            is_cli = d["key"] == "cli"
-            key_entry.configure(state=("disabled" if is_cli else "normal"))
-            get_key_btn.configure(state=("disabled" if is_cli else "normal"))
+            no_key = not d["needs_key"]  # CLI providers (Claude, Gemini CLI) need none
+            key_entry.configure(state=("disabled" if no_key else "normal"))
+            get_key_btn.configure(state=("disabled" if no_key else "normal"))
             base_entry.configure(state=("normal" if d["key"] == "openai" else "disabled"))
             saved = (self.settings.get("providers") or {}).get(d["key"], {})
             key_var.set(providers.load_secrets().get(d["key"], ""))

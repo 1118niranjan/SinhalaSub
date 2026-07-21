@@ -50,8 +50,9 @@ provider. Set `SINHALASUB_PROVIDER` to `cli`, `anthropic`, `gemini`, or `openai`
 | Provider | Key goes in | Default model | Notes |
 |---|---|---|---|
 | Claude Code CLI | — (no key) | your `/model` setting | Default; runs on your Claude subscription |
+| Gemini CLI (Google login) | — (no key) | `gemini-2.5-flash` | Free via your Google account. Install `npm i -g @google/gemini-cli`, run `gemini` once → **Login with Google**. Slower than the Gemini API (spawns per batch) but free and doesn't touch your Claude limit. |
 | Anthropic API | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` | System prompt is prompt-cached for speed |
-| Google Gemini | `GEMINI_API_KEY` | `gemini-2.5-flash` | |
+| Google Gemini (API) | `GEMINI_API_KEY` | `gemini-2.5-flash` | Fastest Gemini option; free API key from aistudio.google.com/apikey |
 | OpenAI / Local | `OPENAI_API_KEY` (+ `OPENAI_BASE_URL`) | `gpt-4o-mini` | Ollama: `http://localhost:11434/v1`; LM Studio: `http://localhost:1234/v1`; set your local model name |
 
 **Speed:** API providers are far faster than the CLI because they avoid

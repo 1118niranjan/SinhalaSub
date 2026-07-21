@@ -1,9 +1,9 @@
 import providers
 
 
-def test_four_providers_with_expected_keys():
+def test_providers_with_expected_keys():
     keys = [p["key"] for p in providers.PROVIDERS]
-    assert keys == ["cli", "anthropic", "gemini", "openai"]
+    assert keys == ["cli", "gemini-cli", "anthropic", "gemini", "openai"]
 
 
 def test_default_models():
@@ -11,6 +11,11 @@ def test_default_models():
     assert providers.provider_by_key("gemini")["default_model"] == "gemini-2.5-flash"
     assert providers.provider_by_key("openai")["default_model"] == "gpt-4o-mini"
     assert providers.provider_by_key("cli")["needs_key"] is False
+
+
+def test_gemini_cli_is_keyless():
+    assert providers.provider_by_key("gemini-cli")["needs_key"] is False
+    assert providers.provider_by_key("gemini-cli")["default_model"] == "gemini-2.5-flash"
 
 
 def test_provider_by_key_falls_back_to_cli():

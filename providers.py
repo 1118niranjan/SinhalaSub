@@ -21,6 +21,9 @@ PROVIDERS = [
     {"key": "cli", "label": "Claude Code CLI", "needs_key": False,
      "default_model": "CLI default", "env_key": None, "env_base": None,
      "default_base_url": None, "default_workers": 3},
+    {"key": "gemini-cli", "label": "Gemini CLI (Google login)", "needs_key": False,
+     "default_model": "gemini-2.5-flash", "env_key": None, "env_base": None,
+     "default_base_url": None, "default_workers": 4},
     {"key": "anthropic", "label": "Anthropic API", "needs_key": True,
      "default_model": "claude-haiku-4-5", "env_key": "ANTHROPIC_API_KEY",
      "env_base": None, "default_base_url": None, "default_workers": 10},
@@ -129,6 +132,43 @@ class CliProvider(Provider):
                 return self.translate(prompt, stdin_text, timeout)
             raise RuntimeError(
                 "claude CLI failed (exit %d): %s" % (result.returncode, err[:500]))
+        return result.stdout
+
+
+class GeminiCliProvider(Provider):
+    """Runs Google's Gemini CLI headlessly, using its Google-account login.
+
+    No API key: the user runs `gemini` once and picks "Login with Google" (free
+    tier). We spawn `gemini -p <instruction>` with the batch content on stdin,
+    exactly like the Claude CLI. Being a per-batch process spawn, it is slower
+    than the Gemini API but costs nothing and doesn't touch any Claude usage.
+    """
+
+    def __init__(self, model="gemini-2.5-flash", cli_path=None):
+        self.model = (model or "").strip()  # blank = the CLI's own default model
+        self.cli_path = cli_path or shutil.which("gemini")
+
+    def available(self):
+        return bool(self.cli_path)
+
+    def translate(self, prompt, stdin_text, timeout):
+        if not self.cli_path:
+            raise RuntimeError(
+                "gemini CLI not found on PATH. Install it with "
+                "'npm install -g @google/gemini-cli', then run 'gemini' once and "
+                "choose Login with Google.")
+        args = [self.cli_path, "-p", prompt]
+        if self.model:
+            args += ["-m", self.model]
+        result = subprocess.run(
+            args, input=stdin_text, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout,
+            creationflags=_NO_WINDOW,
+        )
+        if result.returncode != 0:
+            err = ((result.stderr or "") + " " + (result.stdout or "")).strip()
+            raise RuntimeError(
+                "gemini CLI failed (exit %d): %s" % (result.returncode, err[:500]))
         return result.stdout
 
 
@@ -246,6 +286,9 @@ def make_provider(key, *, model=None, api_key="", base_url=None, cli_path=None,
     model = model or desc["default_model"]
     if key == "cli":
         return CliProvider(model=model, cli_path=cli_path)
+    if key == "gemini-cli":
+        # Self-resolves the 'gemini' binary; ignore any Claude cli_path passed in.
+        return GeminiCliProvider(model=model)
     if key == "anthropic":
         return AnthropicProvider(model=model, api_key=api_key, max_tokens=max_tokens)
     if key == "gemini":
