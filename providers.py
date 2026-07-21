@@ -237,3 +237,37 @@ class OpenAIProvider(Provider):
         if not choices:
             raise RuntimeError("No choices in response: %s" % (resp.text or "")[:200])
         return choices[0].get("message", {}).get("content", "") or ""
+
+
+def make_provider(key, *, model=None, api_key="", base_url=None, cli_path=None,
+                  max_tokens=8000):
+    desc = provider_by_key(key)
+    key = desc["key"]
+    model = model or desc["default_model"]
+    if key == "cli":
+        return CliProvider(model=model, cli_path=cli_path)
+    if key == "anthropic":
+        return AnthropicProvider(model=model, api_key=api_key, max_tokens=max_tokens)
+    if key == "gemini":
+        return GeminiProvider(model=model, api_key=api_key, max_tokens=max_tokens)
+    return OpenAIProvider(model=model, api_key=api_key,
+                          base_url=base_url or desc["default_base_url"],
+                          max_tokens=max_tokens)
+
+
+def default_workers(key):
+    return provider_by_key(key)["default_workers"]
+
+
+def build_active_provider(settings, secrets=None, cli_path=None):
+    """Build the provider the user selected, resolving key/model/base_url."""
+    desc = provider_by_key((settings or {}).get("provider", "cli"))
+    key = desc["key"]
+    if key == "cli":
+        return make_provider("cli", model=(settings or {}).get("model") or "CLI default",
+                             cli_path=cli_path)
+    pconf = ((settings or {}).get("providers") or {}).get(key, {})
+    model = pconf.get("model") or desc["default_model"]
+    base_url = pconf.get("base_url") or desc.get("default_base_url")
+    api_key = resolve_api_key(key, secrets)
+    return make_provider(key, model=model, api_key=api_key, base_url=base_url)
