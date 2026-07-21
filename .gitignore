@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.pyc
+*.si.partial.json
+translations.db
+settings.json
