@@ -200,3 +200,40 @@ class GeminiProvider(Provider):
                                % (resp.text or "")[:200])
         parts = cands[0].get("content", {}).get("parts", [])
         return "".join(p.get("text", "") for p in parts)
+
+
+class OpenAIProvider(Provider):
+    """Any OpenAI-compatible chat endpoint: OpenAI, OpenRouter, Ollama, LM Studio."""
+
+    def __init__(self, model, api_key="", base_url="https://api.openai.com/v1",
+                 max_tokens=8000):
+        self.model = model
+        self.api_key = api_key
+        self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
+        self.max_tokens = max_tokens
+
+    def available(self):
+        return bool(self.base_url)
+
+    def translate(self, prompt, stdin_text, timeout):
+        import requests
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = "Bearer %s" % self.api_key
+        body = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": prompt},
+                         {"role": "user", "content": stdin_text}],
+            "max_tokens": self.max_tokens,
+            "temperature": 0.3,
+        }
+        resp = requests.post(self.base_url + "/chat/completions",
+                             json=body, headers=headers, timeout=timeout)
+        if resp.status_code != 200:
+            raise RuntimeError("OpenAI-compatible API error %d: %s"
+                               % (resp.status_code, (resp.text or "")[:300]))
+        data = resp.json()
+        choices = data.get("choices", [])
+        if not choices:
+            raise RuntimeError("No choices in response: %s" % (resp.text or "")[:200])
+        return choices[0].get("message", {}).get("content", "") or ""
