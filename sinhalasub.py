@@ -26,6 +26,8 @@ from tkinter import colorchooser, filedialog, messagebox, ttk
 
 import pysrt
 
+import providers
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -204,44 +206,7 @@ def parse_response(stdout, expected):
     return found
 
 
-# --strict-mcp-config: skip loading the user's MCP servers/connectors on every
-# spawn (a large chunk of per-batch startup time). Dropped automatically if
-# the installed CLI is too old to know the flag.
-_extra_args = ["--strict-mcp-config"]
-
-# On Windows the claude CLI is a .cmd shim, so each subprocess would flash its
-# own console window. CREATE_NO_WINDOW keeps every call fully hidden.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-
-def run_claude(claude_path, stdin_text, model=None):
-    """One headless claude call; returns stdout text or raises RuntimeError."""
-    args = [claude_path, "-p", PROMPT] + list(_extra_args)
-    if model:
-        args += ["--model", model]
-    result = subprocess.run(
-        args,
-        input=stdin_text,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=CLAUDE_TIMEOUT,
-        creationflags=_NO_WINDOW,
-    )
-    if result.returncode != 0:
-        err = ((result.stderr or "") + " " + (result.stdout or "")).strip()
-        if _extra_args and ("unknown option" in err.lower()
-                            or "unrecognized" in err.lower()):
-            del _extra_args[:]
-            return run_claude(claude_path, stdin_text, model)
-        raise RuntimeError(
-            "claude CLI failed (exit %d): %s" % (result.returncode, err[:500]))
-    return result.stdout
-
-
-def translate_batch(subs, batch, claude_path, log=None, model=None, cancel=None,
-                    skip=None):
+def translate_batch(subs, batch, provider, log=None, cancel=None, skip=None):
     """Translate one batch of cue positions; returns {position: sinhala_text}.
 
     Retries the whole batch while lines are missing or malformed (MAX_ATTEMPTS
@@ -257,7 +222,7 @@ def translate_batch(subs, batch, claude_path, log=None, model=None, cancel=None,
         if cancel is not None and cancel.is_set():
             raise TranslationCancelled()
         try:
-            out = run_claude(claude_path, stdin_text, model=model)
+            out = provider.translate(PROMPT, stdin_text, CLAUDE_TIMEOUT)
         except (RuntimeError, subprocess.TimeoutExpired) as exc:
             last_error = exc
             if log:
@@ -271,7 +236,7 @@ def translate_batch(subs, batch, claude_path, log=None, model=None, cancel=None,
             log("attempt %d: %d/%d lines parsed, retrying"
                 % (attempt, len(got), len(expected)))
     if not got and last_error is not None:
-        raise RuntimeError("claude CLI failed for the whole batch: %s" % last_error)
+        raise RuntimeError("provider failed for the whole batch: %s" % last_error)
     result = {}
     for i in targets:
         n = i + 1
@@ -284,11 +249,11 @@ def translate_batch(subs, batch, claude_path, log=None, model=None, cancel=None,
     return result
 
 
-def translate_all(subs, claude_path, progress=None, log=None, workers=None,
-                  model=None, cancel=None, initial=None, on_batch=None):
+def translate_all(subs, provider, progress=None, log=None, workers=None,
+                  cancel=None, initial=None, on_batch=None):
     """Translate every cue; returns a list of Sinhala texts aligned to subs order.
 
-    workers   - parallel claude calls (safe: batch context is source English)
+    provider  - a providers.Provider (CLI, Anthropic, Gemini, or OpenAI-compatible)
     initial   - {position: text} already translated (resume); those batches skip
     on_batch  - called with each finished batch dict (used for checkpointing)
     progress(batches_done, batches_total) is called after each batch.
@@ -310,8 +275,7 @@ def translate_all(subs, claude_path, progress=None, log=None, workers=None,
     first_error = None
     user_cancelled = False
     with ThreadPoolExecutor(max_workers=max(1, workers or MAX_WORKERS)) as ex:
-        futures = [ex.submit(translate_batch, subs, b, claude_path, log, model,
-                             stop, skip)
+        futures = [ex.submit(translate_batch, subs, b, provider, log, stop, skip)
                    for b, skip in todo]
         for fut in as_completed(futures):
             try:
