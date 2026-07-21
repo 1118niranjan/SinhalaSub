@@ -616,12 +616,32 @@ class SinhalaSubApp:
         root.title("SinhalaSub")
         root.minsize(720, 340)
 
+        self.provider_key = self.settings.get("provider", "cli")
+
+        menubar = tk.Menu(root)
+        self.providers_menu = tk.Menu(menubar, tearoff=0)
+        self._menu_provider = tk.StringVar(value=self.provider_key)
+        for desc in providers.PROVIDERS:
+            self.providers_menu.add_radiobutton(
+                label=desc["label"], value=desc["key"],
+                variable=self._menu_provider,
+                command=lambda k=desc["key"]: self._select_provider(k))
+        self.providers_menu.add_separator()
+        self.providers_menu.add_command(label="Settings…",
+                                        command=self.open_provider_settings)
+        menubar.add_cascade(label="Providers", menu=self.providers_menu)
+        menubar.add_command(label="About", command=self.show_about)
+        root.config(menu=menubar)
+
         main = ttk.Frame(root, padding=16)
         main.pack(fill="both", expand=True)
 
         ttk.Label(main, text="SinhalaSub", style="Header.TLabel").pack(anchor="w")
-        ttk.Label(main, text="English → සිංහල subtitles · runs on your local claude CLI",
-                  style="Dim.TLabel").pack(anchor="w", pady=(0, 12))
+        self.subtitle_lbl = ttk.Label(
+            main,
+            text="English → සිංහල subtitles · Engine: %s" % self._engine_label(),
+            style="Dim.TLabel")
+        self.subtitle_lbl.pack(anchor="w", pady=(0, 12))
 
         file_row = ttk.Frame(main)
         file_row.pack(fill="x")
@@ -645,7 +665,7 @@ class SinhalaSubApp:
                      state="readonly", width=11).pack(side="left", padx=(6, 18))
         ttk.Label(opts, text="Parallel batches", style="Dim.TLabel").pack(side="left")
         self.workers_var = tk.StringVar(value=str(self.settings.get("workers", MAX_WORKERS)))
-        ttk.Spinbox(opts, from_=1, to=6, textvariable=self.workers_var,
+        ttk.Spinbox(opts, from_=1, to=20, textvariable=self.workers_var,
                     width=4, state="readonly").pack(side="left", padx=6)
 
         ttk.Label(main, style="Dim.TLabel", wraplength=660,
@@ -691,11 +711,7 @@ class SinhalaSubApp:
         ttk.Label(main, textvariable=self.status_var, style="Dim.TLabel",
                   wraplength=660).pack(anchor="w", pady=(8, 0))
 
-        if not self.claude_path:
-            self.translate_btn.state(["disabled"])
-            self.status_var.set(
-                "ERROR: the claude CLI was not found on PATH. Install Claude Code, "
-                "sign in, then restart this app.")
+        self._update_translate_gate()
 
         # Remember choices: save whenever the user changes any of these.
         self._loaded = True
@@ -712,13 +728,13 @@ class SinhalaSubApp:
     def _persist(self, *_):
         if not self._loaded:
             return
-        save_settings({
-            "model": self.model_var.get(),
-            "workers": self.workers_var.get(),
-            "memory": bool(self.memory_var.get()),
-            "color_hex": self.color_hex,
-            "color_name": self.color_name.get(),
-        })
+        # Merge into self.settings so provider/providers keys survive.
+        self.settings["model"] = self.model_var.get()
+        self.settings["workers"] = self.workers_var.get()
+        self.settings["memory"] = bool(self.memory_var.get())
+        self.settings["color_hex"] = self.color_hex
+        self.settings["color_name"] = self.color_name.get()
+        save_settings(self.settings)
 
     def _on_close(self):
         self._persist()
@@ -730,6 +746,62 @@ class SinhalaSubApp:
                 except tk.TclError:
                     pass
         self.root.destroy()
+
+    # ----- provider selection ----------------------------------------------
+
+    def _engine_label(self):
+        desc = providers.provider_by_key(self.provider_key)
+        if desc["key"] == "cli":
+            return "Claude Code CLI"
+        pconf = (self.settings.get("providers") or {}).get(desc["key"], {})
+        model = pconf.get("model") or desc["default_model"]
+        return "%s (%s)" % (desc["label"], model)
+
+    def _refresh_engine_header(self):
+        self.subtitle_lbl.configure(
+            text="English → සිංහල subtitles · Engine: %s" % self._engine_label())
+        self._update_translate_gate()
+
+    def _update_translate_gate(self):
+        prov = providers.build_active_provider(self.settings, cli_path=self.claude_path)
+        if prov.available():
+            if not self.running:
+                self.translate_btn.state(["!disabled"])
+            self.status_var.set("Select an English .srt file.")
+        else:
+            self.translate_btn.state(["disabled"])
+            desc = providers.provider_by_key(self.provider_key)
+            if desc["key"] == "cli":
+                self.status_var.set(
+                    "ERROR: the claude CLI was not found on PATH. Install Claude "
+                    "Code and sign in, or pick another provider in Providers.")
+            else:
+                self.status_var.set(
+                    "%s needs an API key. Open Providers → Settings… to add it."
+                    % desc["label"])
+
+    def _select_provider(self, key):
+        self.provider_key = key
+        self.settings["provider"] = key
+        save_settings(self.settings)
+        # Reset parallelism to this engine's sensible default (CLI 3, API 10);
+        # the user can still tweak the spinbox afterwards.
+        self.workers_var.set(str(providers.default_workers(key)))
+        self._refresh_engine_header()
+
+    def show_about(self):
+        messagebox.showinfo(
+            "About SinhalaSub",
+            "SinhalaSub\n\n"
+            "Translate English movie subtitles into natural, meaning-based "
+            "spoken Sinhala using the LLM backbone of your choice — Claude "
+            "Code CLI, Anthropic API, Google Gemini, or any OpenAI-compatible / "
+            "local model.\n\n"
+            "Created by NLK")
+
+    def open_provider_settings(self):
+        # Replaced with the full dialog in Task 9.
+        pass
 
     # ----- widgets ---------------------------------------------------------
 
@@ -835,13 +907,20 @@ class SinhalaSubApp:
             else:
                 clear_checkpoint(path)
 
-        model = self.model_var.get()
-        self.last_model = model
-        model = None if model == "CLI default" else model
+        # For the CLI provider the main-window Model dropdown chooses the model;
+        # API providers take their model from Providers -> Settings.
+        if self.provider_key == "cli":
+            self.settings["model"] = self.model_var.get()
+        self.last_model = self._engine_label()
+        self.provider = providers.build_active_provider(
+            self.settings, cli_path=self.claude_path)
+        if not self.provider.available():
+            self._update_translate_gate()
+            return
         try:
-            workers = max(1, min(6, int(self.workers_var.get())))
+            workers = max(1, min(20, int(self.workers_var.get())))
         except ValueError:
-            workers = MAX_WORKERS
+            workers = providers.default_workers(self.provider_key)
 
         self.subs = subs
         self.texts = None
@@ -860,9 +939,9 @@ class SinhalaSubApp:
         self.running = True
         threading.Thread(
             target=self._worker,
-            args=(subs, path, initial, model, workers), daemon=True).start()
+            args=(subs, path, initial, workers), daemon=True).start()
 
-    def _worker(self, subs, path, initial, model, workers):
+    def _worker(self, subs, path, initial, workers):
         saved = {int(k): v for k, v in (initial or {}).items()}
 
         def on_batch(result):
@@ -874,10 +953,10 @@ class SinhalaSubApp:
 
         try:
             texts = translate_all(
-                subs, self.claude_path,
+                subs, self.provider,
                 progress=lambda d, t: self.msgs.put(("progress", d, t)),
                 log=lambda m: self.msgs.put(("status", m)),
-                workers=workers, model=model, cancel=self.cancel_event,
+                workers=workers, cancel=self.cancel_event,
                 initial=initial, on_batch=on_batch)
             self.msgs.put(("done", texts))
         except TranslationCancelled:
