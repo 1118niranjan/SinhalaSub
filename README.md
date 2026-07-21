@@ -1,8 +1,11 @@
 # SinhalaSub
 
 Translate an English movie subtitle (`.srt`) into natural, meaning-based spoken
-Sinhala — using your local `claude` CLI (Claude Code subscription, headless) as
-the translation engine. No API keys, no per-token cost.
+Sinhala using the LLM backbone of your choice — the local `claude` CLI (default,
+no API key), the Anthropic API, Google Gemini, or **any** OpenAI-compatible or
+local model (OpenRouter, Ollama, LM Studio, LiteLLM).
+
+*Created by NLK.*
 
 ## Requirements
 
@@ -31,6 +34,31 @@ The output is written next to the input as `<basename>.si.srt` — e.g.
 `Movie.2021.srt` → `Movie.2021.si.srt` — in UTF-8 (no BOM), with cue indexes and
 timestamps identical to the input. Put it next to `Movie.2021.mkv` and PotPlayer
 auto-loads it.
+
+## Connecting an LLM (where to put your API key)
+
+Two ways — either works, and neither is ever committed to GitHub:
+
+**In the app (easiest).** Open the **Providers** menu at the top → pick a
+provider → **Settings…**. Paste your API key (and, for OpenAI-compatible/local,
+the Base URL and model), then click **Test connection** to confirm it works, and
+**Save**. Your choice is remembered.
+
+**Or in `.env`.** Copy `.env.example` to `.env` and fill the block for your
+provider. Set `SINHALASUB_PROVIDER` to `cli`, `anthropic`, `gemini`, or `openai`.
+
+| Provider | Key goes in | Default model | Notes |
+|---|---|---|---|
+| Claude Code CLI | — (no key) | your `/model` setting | Default; runs on your Claude subscription |
+| Anthropic API | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` | System prompt is prompt-cached for speed |
+| Google Gemini | `GEMINI_API_KEY` | `gemini-2.5-flash` | |
+| OpenAI / Local | `OPENAI_API_KEY` (+ `OPENAI_BASE_URL`) | `gpt-4o-mini` | Ollama: `http://localhost:11434/v1`; LM Studio: `http://localhost:1234/v1`; set your local model name |
+
+**Speed:** API providers are far faster than the CLI because they avoid
+launching a process per batch. A 2-hour movie drops from ~15 min to ~1–3 min.
+For the best mix of speed and quality use a fast model (Claude Haiku, Gemini
+Flash, `gpt-4o-mini`); switch to a larger model (Sonnet/Opus, Gemini Pro) only
+when a film needs extra polish.
 
 ## Choosing a model (and saving your usage limit)
 

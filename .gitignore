@@ -4,3 +4,4 @@ __pycache__/
 *.si.partial.json
 translations.db
 settings.json
+secrets.json
