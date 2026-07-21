@@ -95,3 +95,38 @@ class Provider:
         if out and out.strip():
             return (True, "OK (%.1fs)" % (time.time() - started))
         return (False, "Empty response from provider")
+
+
+class CliProvider(Provider):
+    """Runs the local Claude Code CLI headlessly, once per batch (existing engine)."""
+
+    def __init__(self, model="CLI default", cli_path=None):
+        self.model = None if model in (None, "", "CLI default") else model
+        self.cli_path = cli_path or shutil.which("claude")
+        # Skip loading the user's MCP servers on every spawn (startup cost).
+        # Dropped automatically if the installed CLI is too old to know the flag.
+        self._extra_args = ["--strict-mcp-config"]
+
+    def available(self):
+        return bool(self.cli_path)
+
+    def translate(self, prompt, stdin_text, timeout):
+        if not self.cli_path:
+            raise RuntimeError("claude CLI not found on PATH")
+        args = [self.cli_path, "-p", prompt] + list(self._extra_args)
+        if self.model:
+            args += ["--model", self.model]
+        result = subprocess.run(
+            args, input=stdin_text, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout,
+            creationflags=_NO_WINDOW,
+        )
+        if result.returncode != 0:
+            err = ((result.stderr or "") + " " + (result.stdout or "")).strip()
+            if self._extra_args and ("unknown option" in err.lower()
+                                     or "unrecognized" in err.lower()):
+                self._extra_args = []
+                return self.translate(prompt, stdin_text, timeout)
+            raise RuntimeError(
+                "claude CLI failed (exit %d): %s" % (result.returncode, err[:500]))
+        return result.stdout
