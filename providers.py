@@ -130,3 +130,39 @@ class CliProvider(Provider):
             raise RuntimeError(
                 "claude CLI failed (exit %d): %s" % (result.returncode, err[:500]))
         return result.stdout
+
+
+class AnthropicProvider(Provider):
+    """Direct Claude API. The system prompt is prompt-cached across batches."""
+
+    URL = "https://api.anthropic.com/v1/messages"
+
+    def __init__(self, model, api_key, max_tokens=8000):
+        self.model = model
+        self.api_key = api_key
+        self.max_tokens = max_tokens
+
+    def available(self):
+        return bool(self.api_key)
+
+    def translate(self, prompt, stdin_text, timeout):
+        import requests  # lazy: CLI-only use never needs it
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        body = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "system": [{"type": "text", "text": prompt,
+                        "cache_control": {"type": "ephemeral"}}],
+            "messages": [{"role": "user", "content": stdin_text}],
+        }
+        resp = requests.post(self.URL, json=body, headers=headers, timeout=timeout)
+        if resp.status_code != 200:
+            raise RuntimeError("Anthropic API error %d: %s"
+                               % (resp.status_code, (resp.text or "")[:300]))
+        data = resp.json()
+        return "".join(b.get("text", "") for b in data.get("content", [])
+                       if b.get("type") == "text")
