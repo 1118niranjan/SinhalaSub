@@ -195,10 +195,11 @@ class GoogleTranslateProvider(Provider):
     lines exist for LLM scene understanding and would just waste requests here.
     """
 
-    def __init__(self, model=None, source="en", target="si"):
+    def __init__(self, model=None, source="en", target="si", glossary=None):
         self.model = model or "google-translate"
         self.source = source
         self.target = target
+        self.glossary = glossary or {}
 
     def available(self):
         try:
@@ -225,19 +226,56 @@ class GoogleTranslateProvider(Provider):
         return targets
 
     def translate(self, prompt, stdin_text, timeout):
+        import subtitle_text as st
+
         targets = self._targets(stdin_text)
         if not targets:
             return ""
+
+        # 1. Peel off markup (dashes, italics, music notes) so it is never
+        #    translated as words, and calm down SHOUTED LINES.
+        cores, rebuilds = [], []
+        for _, raw in targets:
+            core, rebuild = st.unwrap(raw)
+            core = st.normalise_caps(core)
+            core = st.apply_glossary(core, self.glossary)
+            cores.append(core)
+            rebuilds.append(rebuild)
+
+        # 2. Join sentences that the subtitle file split across adjacent cues -
+        #    translating half a sentence on its own is what produces nonsense.
+        groups = []
+        for grp in st.group_sentences(cores):
+            run = [grp[0]]
+            for idx in grp[1:]:
+                adjacent = int(targets[idx][0]) == int(targets[run[-1]][0]) + 1
+                if adjacent:
+                    run.append(idx)
+                else:
+                    groups.append(run)
+                    run = [idx]
+            groups.append(run)
+
+        joined = [" ".join(cores[i] for i in g).strip() for g in groups]
         translator = _google_translator_cls()(source=self.source, target=self.target)
-        sources = [t for _, t in targets]
         try:
-            results = translator.translate_batch(sources)
+            results = translator.translate_batch(joined)
         except Exception as exc:  # noqa: BLE001 - surfaced to the retry loop
             raise RuntimeError("Google Translate failed: %s" % str(exc)[:300])
-        lines = []
-        for (num, src), got in zip(targets, results or []):
-            text = (got or "").strip() or src  # keep English rather than blank
-            lines.append("%s|||%s" % (num, text))
+        results = list(results or [])
+
+        # 3. Share each translation back across the cues it came from, then put
+        #    the original markup back on.
+        out = {}
+        for g, got in zip(groups, results + [None] * (len(groups) - len(results))):
+            counts = [max(1, len(cores[i].split())) for i in g]
+            parts = st.split_translation(got or "", counts)
+            for i, part in zip(g, parts):
+                text = (part or "").strip() or cores[i]  # never leave a cue blank
+                out[i] = rebuilds[i](text)
+
+        lines = ["%s|||%s" % (targets[i][0], out.get(i, cores[i]))
+                 for i in range(len(targets))]
         return "\n".join(lines) + "\n"
 
 
