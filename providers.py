@@ -24,6 +24,11 @@ PROVIDERS = [
     {"key": "cli", "label": "Claude Code CLI", "needs_key": False,
      "default_model": "CLI default", "env_key": None, "env_base": None,
      "default_base_url": None, "default_workers": 10},
+    # Free machine translation: no key, no usage, and it parallelises cleanly,
+    # so it is by far the fastest option (whole movie in a couple of minutes).
+    {"key": "google", "label": "Google Translate (free, fast)", "needs_key": False,
+     "default_model": "google-translate", "env_key": None, "env_base": None,
+     "default_base_url": None, "default_workers": 20},
     {"key": "gemini-cli", "label": "Gemini CLI (Google login)", "needs_key": False,
      "default_model": "gemini-2.5-flash", "env_key": None, "env_base": None,
      "default_base_url": None, "default_workers": 4},
@@ -175,6 +180,67 @@ class GeminiCliProvider(Provider):
         return result.stdout
 
 
+def _google_translator_cls():
+    """Imported lazily so the app runs without deep-translator installed."""
+    from deep_translator import GoogleTranslator
+    return GoogleTranslator
+
+
+class GoogleTranslateProvider(Provider):
+    """Free machine translation via Google Translate - no API key, no usage.
+
+    This is not an LLM: it translates each line directly, so the tuned prompt
+    does not apply and the Sinhala is more literal than Claude's. In exchange it
+    is free, unlimited, and fast. Only the TRANSLATE section is sent - context
+    lines exist for LLM scene understanding and would just waste requests here.
+    """
+
+    def __init__(self, model=None, source="en", target="si"):
+        self.model = model or "google-translate"
+        self.source = source
+        self.target = target
+
+    def available(self):
+        try:
+            _google_translator_cls()
+            return True
+        except Exception:  # noqa: BLE001 - library missing or broken import
+            return False
+
+    @staticmethod
+    def _targets(stdin_text):
+        """Pull [(number, source_text)] from the TRANSLATE section only."""
+        targets = []
+        in_target = False
+        for line in stdin_text.splitlines():
+            if line.startswith("TRANSLATE"):
+                in_target = True
+                continue
+            if not in_target or "|||" not in line:
+                continue
+            num, _, src = line.partition("|||")
+            num = num.strip()
+            if num.isdigit():
+                targets.append((num, src.strip()))
+        return targets
+
+    def translate(self, prompt, stdin_text, timeout):
+        targets = self._targets(stdin_text)
+        if not targets:
+            return ""
+        translator = _google_translator_cls()(source=self.source, target=self.target)
+        sources = [t for _, t in targets]
+        try:
+            results = translator.translate_batch(sources)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the retry loop
+            raise RuntimeError("Google Translate failed: %s" % str(exc)[:300])
+        lines = []
+        for (num, src), got in zip(targets, results or []):
+            text = (got or "").strip() or src  # keep English rather than blank
+            lines.append("%s|||%s" % (num, text))
+        return "\n".join(lines) + "\n"
+
+
 class AnthropicProvider(Provider):
     """Direct Claude API. The system prompt is prompt-cached across batches."""
 
@@ -289,6 +355,8 @@ def make_provider(key, *, model=None, api_key="", base_url=None, cli_path=None,
     model = model or desc["default_model"]
     if key == "cli":
         return CliProvider(model=model, cli_path=cli_path)
+    if key == "google":
+        return GoogleTranslateProvider(model=model)
     if key == "gemini-cli":
         # Self-resolves the 'gemini' binary; ignore any Claude cli_path passed in.
         return GeminiCliProvider(model=model)

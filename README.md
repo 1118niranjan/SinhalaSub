@@ -49,7 +49,8 @@ provider. Set `SINHALASUB_PROVIDER` to `cli`, `anthropic`, `gemini`, or `openai`
 
 | Provider | Key goes in | Default model | Notes |
 |---|---|---|---|
-| Claude Code CLI | — (no key) | your `/model` setting | Default; runs on your Claude subscription |
+| **Google Translate (free, fast)** | — (no key) | — | **Fastest option: a full movie in ~4 minutes, free and unlimited, no sign-in.** Machine translation, so the Sinhala is more literal than an LLM's — great for watching, less nuanced on jokes/slang. |
+| Claude Code CLI | — (no key) | your `/model` setting | Best Sinhala quality, but ~35 min per movie and it consumes your Claude usage limit (measured ~1 cue/sec ceiling) |
 | Gemini CLI (Google login) | — (no key) | `gemini-2.5-flash` | Free via your Google account. Install `npm i -g @google/gemini-cli`, run `gemini` once → **Login with Google**. Slower than the Gemini API (spawns per batch) but free and doesn't touch your Claude limit. |
 | Anthropic API | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` | System prompt is prompt-cached for speed |
 | Google Gemini (API) | `GEMINI_API_KEY` | `gemini-2.5-flash` | Fastest Gemini option; free API key from aistudio.google.com/apikey |
@@ -57,8 +58,17 @@ provider. Set `SINHALASUB_PROVIDER` to `cli`, `anthropic`, `gemini`, or `openai`
 
 > **Free via OpenRouter:** create a free key at [openrouter.ai/keys](https://openrouter.ai/keys) (no card), pick a `:free` model, and set the base URL above. The free tier allows ~50 requests/day — raise **Cues per batch** to ~60 so a full movie fits in one day.
 
-**Speed:** API providers are far faster than the CLI because they avoid
-launching a process per batch. A 2-hour movie drops from ~15 min to ~1–3 min.
+**Speed (measured on a 2-hour movie, ~2000 cues):**
+
+| Engine | Time | Cost |
+|---|---|---|
+| Google Translate | **~4 min** | free, unlimited |
+| HTTP APIs (Gemini / OpenRouter / Anthropic) | ~3–5 min | free tier or cents |
+| Claude Code CLI | ~35 min | your Claude usage limit |
+
+The app also skips cues that need no translation (`[music]`, `♪`, numbers),
+translates repeated lines (`Yeah.`, `Okay.`) only once, and packs each request
+with real work only — so every engine sends far fewer tokens than before.
 For the best mix of speed and quality use a fast model (Claude Haiku, Gemini
 Flash, `gpt-4o-mini`); switch to a larger model (Sonnet/Opus, Gemini Pro) only
 when a film needs extra polish.

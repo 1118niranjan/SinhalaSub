@@ -3,7 +3,7 @@ import providers
 
 def test_providers_with_expected_keys():
     keys = [p["key"] for p in providers.PROVIDERS]
-    assert keys == ["cli", "gemini-cli", "anthropic", "gemini", "openai"]
+    assert keys == ["cli", "google", "gemini-cli", "anthropic", "gemini", "openai"]
 
 
 def test_default_models():
