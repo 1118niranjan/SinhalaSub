@@ -29,6 +29,9 @@ PROVIDERS = [
     {"key": "google", "label": "Google Translate (free, fast)", "needs_key": False,
      "default_model": "google-translate", "env_key": None, "env_base": None,
      "default_base_url": None, "default_workers": 20},
+    {"key": "hybrid", "label": "Google + Claude polish (best mix)", "needs_key": False,
+     "default_model": "hybrid", "env_key": None, "env_base": None,
+     "default_base_url": None, "default_workers": 6},
     {"key": "gemini-cli", "label": "Gemini CLI (Google login)", "needs_key": False,
      "default_model": "gemini-2.5-flash", "env_key": None, "env_base": None,
      "default_base_url": None, "default_workers": 4},
@@ -178,6 +181,57 @@ class GeminiCliProvider(Provider):
             raise RuntimeError(
                 "gemini CLI failed (exit %d): %s" % (result.returncode, err[:500]))
         return result.stdout
+
+
+class HybridProvider(Provider):
+    """Fast engine for everything, a better engine for the demanding lines.
+
+    Short lines ("Yeah.", "Okay.") are where machine translation is already
+    fine; long, clause-heavy lines are where it falls apart. So the fast engine
+    does the bulk in seconds and only the long lines are re-done by the LLM,
+    which keeps the run quick and the usage small while lifting the hard parts.
+    """
+
+    def __init__(self, fast, good, min_words=8):
+        self.fast = fast
+        self.good = good
+        self.min_words = min_words
+        self.model = "hybrid"
+
+    def available(self):
+        # The fast engine alone is enough to produce a complete file.
+        return bool(self.fast and self.fast.available())
+
+    def translate(self, prompt, stdin_text, timeout):
+        import sinhalasub  # for parse_response; imported late to avoid a cycle
+
+        targets = GoogleTranslateProvider._targets(stdin_text)
+        if not targets:
+            return ""
+        merged = {}
+        for line in self.fast.translate(prompt, stdin_text, timeout).splitlines():
+            num, _, body = line.partition("|||")
+            if num.strip().isdigit():
+                merged[num.strip()] = body.strip()
+
+        hard = [(n, src) for n, src in targets
+                if len(src.split()) >= self.min_words]
+        if hard:
+            sub_stdin = ("TRANSLATE (%d lines - output exactly these numbers):\n"
+                         % len(hard))
+            sub_stdin += "".join("%s|||%s\n" % (n, s) for n, s in hard)
+            try:
+                out = self.good.translate(prompt, sub_stdin, timeout)
+                for line in out.splitlines():
+                    num, _, body = line.partition("|||")
+                    num, body = num.strip(), body.strip()
+                    if num.isdigit() and body:
+                        merged[num] = body
+            except Exception:  # noqa: BLE001 - keep the fast result on failure
+                pass
+
+        return "\n".join("%s|||%s" % (n, merged.get(n, src))
+                         for n, src in targets) + "\n"
 
 
 def _google_translator_cls():
@@ -415,9 +469,14 @@ def build_active_provider(settings, secrets=None, cli_path=None):
     """Build the provider the user selected, resolving key/model/base_url."""
     desc = provider_by_key((settings or {}).get("provider", "cli"))
     key = desc["key"]
+    gloss = (settings or {}).get("glossary") or {}
     if key == "google":
-        return GoogleTranslateProvider(
-            glossary=(settings or {}).get("glossary") or {})
+        return GoogleTranslateProvider(glossary=gloss)
+    if key == "hybrid":
+        return HybridProvider(
+            GoogleTranslateProvider(glossary=gloss),
+            CliProvider(model=(settings or {}).get("model") or "CLI default",
+                        cli_path=cli_path))
     if key == "cli":
         return make_provider("cli", model=(settings or {}).get("model") or "CLI default",
                              cli_path=cli_path)
