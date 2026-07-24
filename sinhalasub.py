@@ -27,6 +27,7 @@ from tkinter import colorchooser, filedialog, messagebox, ttk
 
 import pysrt
 
+import colorize
 import providers
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -695,17 +696,32 @@ class SinhalaSubApp:
         menubar.add_command(label="About", command=self.show_about)
         root.config(menu=menubar)
 
-        main = ttk.Frame(root, padding=16)
-        main.pack(fill="both", expand=True)
-        self.main = main
+        outer = ttk.Frame(root, padding=16)
+        outer.pack(fill="both", expand=True)
         self._os_panel = None
 
-        ttk.Label(main, text="SinhalaSub", style="Header.TLabel").pack(anchor="w")
+        ttk.Label(outer, text="SinhalaSub", style="Header.TLabel").pack(anchor="w")
         self.subtitle_lbl = ttk.Label(
-            main,
+            outer,
             text="English → සිංහල subtitles · Engine: %s" % self._engine_label(),
             style="Dim.TLabel")
-        self.subtitle_lbl.pack(anchor="w", pady=(0, 12))
+        self.subtitle_lbl.pack(anchor="w", pady=(0, 10))
+
+        # Engine knobs live in Providers -> Settings so this window stays clean.
+        saved_model = self.settings.get("model")
+        init_model = saved_model if saved_model in MODEL_CHOICES else (
+            DEFAULT_MODEL if DEFAULT_MODEL in MODEL_CHOICES else "CLI default")
+        self.model_var = tk.StringVar(value=init_model)
+        self.workers_var = tk.StringVar(value=str(self.settings.get("workers", MAX_WORKERS)))
+        self.batch_var = tk.StringVar(value=str(self.settings.get("batch_size", "Auto")))
+
+        nb = ttk.Notebook(outer)
+        nb.pack(fill="both", expand=True)
+        main = ttk.Frame(nb, padding=14)
+        colour_tab = ttk.Frame(nb, padding=14)
+        nb.add(main, text="  Translate  ")
+        nb.add(colour_tab, text="  Colour & Style  ")
+        self.main = main
 
         file_row = ttk.Frame(main)
         file_row.pack(fill="x")
@@ -718,54 +734,22 @@ class SinhalaSubApp:
         if self.os_key:
             self._build_opensubtitles(main)
 
-        opts = ttk.Frame(main)
-        opts.pack(fill="x", pady=(12, 0))
-        ttk.Label(opts, text="Model", style="Dim.TLabel").pack(side="left")
-        saved_model = self.settings.get("model")
-        init_model = saved_model if saved_model in MODEL_CHOICES else (
-            DEFAULT_MODEL if DEFAULT_MODEL in MODEL_CHOICES else "CLI default")
-        self.model_var = tk.StringVar(value=init_model)
-        ttk.Combobox(opts, textvariable=self.model_var, values=MODEL_CHOICES,
-                     state="readonly", width=11).pack(side="left", padx=(6, 18))
-        ttk.Label(opts, text="Parallel batches", style="Dim.TLabel").pack(side="left")
-        self.workers_var = tk.StringVar(value=str(self.settings.get("workers", MAX_WORKERS)))
-        ttk.Spinbox(opts, from_=1, to=20, textvariable=self.workers_var,
-                    width=4, state="readonly").pack(side="left", padx=6)
-        ttk.Label(opts, text="Cues per batch", style="Dim.TLabel").pack(side="left", padx=(18, 0))
-        self.batch_var = tk.StringVar(value=str(self.settings.get("batch_size", "Auto")))
-        ttk.Combobox(opts, textvariable=self.batch_var, state="readonly", width=6,
-                     values=["Auto", "30", "50", "100", "150", "250"]).pack(
-            side="left", padx=6)
-
-        ttk.Label(main, style="Dim.TLabel", wraplength=660,
-                  text="Tip: \"CLI default\" follows your Claude Code /model setting "
-                       "(opus = best but heaviest on your usage limit). Choose sonnet "
-                       "for far lighter usage at high quality, or haiku for the least "
-                       "usage.").pack(anchor="w", pady=(6, 0))
-
         opts2 = ttk.Frame(main)
-        opts2.pack(fill="x", pady=(8, 0))
-        ttk.Label(opts2, text="Subtitle colour", style="Dim.TLabel").pack(side="left")
-        preset = next((n for n, h in COLOR_PRESETS if h == self.color_hex),
-                      "Custom..." if self.color_hex else "None (player default)")
-        self.color_name = tk.StringVar(value=preset)
-        color_box = ttk.Combobox(opts2, textvariable=self.color_name,
-                                 values=[n for n, _ in COLOR_PRESETS],
-                                 state="readonly", width=18)
-        color_box.pack(side="left", padx=(6, 6))
-        color_box.bind("<<ComboboxSelected>>", self._on_color)
-        self.swatch = tk.Label(opts2, width=3, bg=self.color_hex or FIELD,
-                               relief="flat")
-        self.swatch.pack(side="left")
+        opts2.pack(fill="x", pady=(12, 0))
         self.memory_var = tk.BooleanVar(value=self.settings.get("memory", True))
         ttk.Checkbutton(opts2, text="Translation memory (reuse saved lines)",
-                        variable=self.memory_var).pack(side="left", padx=18)
+                        variable=self.memory_var).pack(side="left")
         self.fresh_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(opts2, text="Re-translate fresh (ignore saved)",
-                        variable=self.fresh_var).pack(side="left")
+                        variable=self.fresh_var).pack(side="left", padx=18)
+
+        # Kept so the translate/preview flow can still tint the output.
+        self.color_name = tk.StringVar(
+            value=next((n for n, h in COLOR_PRESETS if h == self.color_hex),
+                       "Custom..." if self.color_hex else "None (player default)"))
 
         act = ttk.Frame(main)
-        act.pack(fill="x", pady=(12, 0))
+        act.pack(fill="x", pady=(14, 0))
         self.translate_btn = ttk.Button(
             act, text="Translate to Sinhala", style="Accent.TButton",
             command=self.start_translate)
@@ -775,10 +759,12 @@ class SinhalaSubApp:
         self.cancel_btn.state(["disabled"])
 
         self.progress = ttk.Progressbar(main, mode="determinate")
-        self.progress.pack(fill="x", pady=(12, 0))
+        self.progress.pack(fill="x", pady=(14, 0))
         self.status_var = tk.StringVar(value="Select an English .srt file.")
         ttk.Label(main, textvariable=self.status_var, style="Dim.TLabel",
                   wraplength=660).pack(anchor="w", pady=(8, 0))
+
+        self._build_colour_tab(colour_tab)
 
         self._update_translate_gate()
 
@@ -805,6 +791,10 @@ class SinhalaSubApp:
         self.settings["memory"] = bool(self.memory_var.get())
         self.settings["color_hex"] = self.color_hex
         self.settings["color_name"] = self.color_name.get()
+        if hasattr(self, "auto_vars"):
+            self.settings["scheme"] = {
+                k: {"on": bool(v.get()), "hex": self.auto_hex.get(k, "")}
+                for k, v in self.auto_vars.items()}
         save_settings(self.settings)
 
     def _on_close(self):
@@ -859,6 +849,22 @@ class SinhalaSubApp:
         # the user can still tweak the spinbox afterwards.
         self.workers_var.set(str(providers.default_workers(key)))
         self._refresh_engine_header()
+
+    def _glossary_text(self):
+        return "\n".join("%s = %s" % (k, v)
+                         for k, v in (self.settings.get("glossary") or {}).items())
+
+    def _save_glossary(self, raw):
+        """Parse 'Term = සිංහල' lines into the saved glossary."""
+        gloss = {}
+        for line in (raw or "").splitlines():
+            if "=" not in line:
+                continue
+            term, _, val = line.partition("=")
+            term, val = term.strip(), val.strip()
+            if term and val:
+                gloss[term] = val
+        self.settings["glossary"] = gloss
 
     def show_about(self):
         messagebox.showinfo(
@@ -932,8 +938,35 @@ class SinhalaSubApp:
         ttk.Label(frm, text="(optional — enables the movie search panel)",
                   style="Dim.TLabel").grid(row=6, column=1, columnspan=2, sticky="w")
 
+        # --- performance knobs, moved off the main window ---
+        ttk.Separator(frm, orient="horizontal").grid(
+            row=7, column=0, columnspan=3, sticky="ew", pady=(10, 6))
+        ttk.Label(frm, text="Claude model", style="Dim.TLabel").grid(
+            row=8, column=0, sticky="w")
+        ttk.Combobox(frm, textvariable=self.model_var, values=MODEL_CHOICES,
+                     state="readonly", width=14).grid(row=8, column=1, sticky="w", pady=3)
+        ttk.Label(frm, text="Parallel batches", style="Dim.TLabel").grid(
+            row=9, column=0, sticky="w")
+        ttk.Spinbox(frm, from_=1, to=20, textvariable=self.workers_var, width=5,
+                    state="readonly").grid(row=9, column=1, sticky="w", pady=3)
+        ttk.Label(frm, text="Cues per batch", style="Dim.TLabel").grid(
+            row=10, column=0, sticky="w")
+        ttk.Combobox(frm, textvariable=self.batch_var, state="readonly", width=8,
+                     values=["Auto", "30", "50", "100", "150", "250"]).grid(
+            row=10, column=1, sticky="w", pady=3)
+
+        ttk.Label(frm, text="Glossary", style="Dim.TLabel").grid(
+            row=11, column=0, sticky="nw", pady=(6, 0))
+        gloss_var = tk.StringVar(value=self._glossary_text())
+        gloss = tk.Text(frm, height=3, width=34, bg=FIELD, fg=TEXT, relief="flat",
+                        insertbackground=TEXT, font=("Segoe UI", 9))
+        gloss.insert("1.0", gloss_var.get())
+        gloss.grid(row=11, column=1, columnspan=2, sticky="ew", pady=(6, 0))
+        ttk.Label(frm, text="one per line:  Marseille = මාර්සෙයි",
+                  style="Dim.TLabel").grid(row=12, column=1, columnspan=2, sticky="w")
+
         status = ttk.Label(frm, text="", style="Dim.TLabel", wraplength=340)
-        status.grid(row=7, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        status.grid(row=13, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
         def sync_fields(*_):
             d = current_desc()
@@ -998,12 +1031,14 @@ class SinhalaSubApp:
             self.os_key = os_val or opensubtitles_key()
             if self.os_key and self._os_panel is None:
                 self._build_opensubtitles(self.main)
+            self._save_glossary(gloss.get("1.0", "end"))
+            self._persist()
             self._menu_provider.set(d["key"])
             self._refresh_engine_header()
             win.destroy()
 
         btns = ttk.Frame(frm)
-        btns.grid(row=8, column=0, columnspan=3, sticky="e", pady=(12, 0))
+        btns.grid(row=14, column=0, columnspan=3, sticky="e", pady=(12, 0))
         ttk.Button(btns, text="Test connection", command=do_test).pack(side="left")
         ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=8)
         ttk.Button(btns, text="Save", style="Accent.TButton",
@@ -1029,6 +1064,184 @@ class SinhalaSubApp:
             self.color_hex = hex_val
         self.swatch.configure(bg=self.color_hex or FIELD)
         self._persist()
+
+    # ----- Colour & Style tab ----------------------------------------------
+
+    AUTO_ROWS = [
+        ("name", "Names & places", "#00E5FF"),
+        ("sound", "Sound & music cues", "#8A8FA8"),
+        ("speaker1", "Speaker 1 (dialogue)", "#FFD700"),
+        ("speaker2", "Speaker 2 (dialogue)", "#7CFC98"),
+        ("emphasis", "Shouting / italics", "#FF7A7A"),
+        ("normal", "All other lines", ""),
+    ]
+
+    def _build_colour_tab(self, parent):
+        saved = self.settings.get("scheme") or {}
+        ttk.Label(parent, text="Colour any subtitle file", style="Dim.TLabel",
+                  wraplength=660).pack(anchor="w")
+
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=(8, 0))
+        ttk.Label(row, text="Subtitle .srt:").pack(side="left")
+        self.colour_input = tk.StringVar()
+        ttk.Entry(row, textvariable=self.colour_input).pack(
+            side="left", fill="x", expand=True, padx=8)
+        ttk.Button(row, text="Browse...", command=self._colour_browse).pack(side="left")
+
+        mode = ttk.Frame(parent)
+        mode.pack(fill="x", pady=(12, 0))
+        self.colour_mode = tk.StringVar(value=self.settings.get("colour_mode", "single"))
+        ttk.Radiobutton(mode, text="One colour for everything", value="single",
+                        variable=self.colour_mode,
+                        command=self._sync_colour_mode).pack(side="left")
+        ttk.Radiobutton(mode, text="Auto colour (by what the line is)", value="auto",
+                        variable=self.colour_mode,
+                        command=self._sync_colour_mode).pack(side="left", padx=16)
+
+        # --- single colour ---
+        self.single_box = ttk.Frame(parent)
+        self.single_box.pack(fill="x", pady=(10, 0))
+        ttk.Label(self.single_box, text="Colour", style="Dim.TLabel").pack(side="left")
+        box = ttk.Combobox(self.single_box, textvariable=self.color_name,
+                           values=[n for n, _ in COLOR_PRESETS],
+                           state="readonly", width=20)
+        box.pack(side="left", padx=(6, 6))
+        box.bind("<<ComboboxSelected>>", self._on_color)
+        self.swatch = tk.Label(self.single_box, width=3,
+                               bg=self.color_hex or FIELD, relief="flat")
+        self.swatch.pack(side="left")
+
+        # --- auto colour ---
+        self.auto_box = ttk.LabelFrame(parent, text=" What to colour ", padding=10)
+        self.auto_vars, self.auto_hex, self.auto_swatches = {}, {}, {}
+        for key, label, default_hex in self.AUTO_ROWS:
+            conf = saved.get(key) or {}
+            r = ttk.Frame(self.auto_box)
+            r.pack(fill="x", pady=2)
+            var = tk.BooleanVar(value=conf.get("on", bool(default_hex)))
+            self.auto_vars[key] = var
+            ttk.Checkbutton(r, text=label, variable=var, width=24).pack(side="left")
+            hexv = conf.get("hex", default_hex)
+            self.auto_hex[key] = hexv
+            sw = tk.Label(r, width=3, bg=hexv or FIELD, relief="flat")
+            sw.pack(side="left", padx=6)
+            self.auto_swatches[key] = sw
+            ttk.Button(r, text="Pick…",
+                       command=lambda k=key: self._pick_auto_colour(k)).pack(side="left")
+
+        ttk.Label(parent, style="Dim.TLabel", wraplength=660,
+                  text="Auto colour reads each line and decides: names get their own "
+                       "colour, [sound cues] are dimmed, the two speakers in a dashed "
+                       "dialogue get different colours, and shouting stands out.").pack(
+            anchor="w", pady=(10, 0))
+
+        act = ttk.Frame(parent)
+        act.pack(fill="x", pady=(12, 0))
+        ttk.Button(act, text="Apply colours & save", style="Accent.TButton",
+                   command=self.apply_colours).pack(side="left")
+        ttk.Button(act, text="Preview", command=self.preview_colours).pack(
+            side="left", padx=8)
+        self.colour_status = tk.StringVar(value="Pick any .srt - English or Sinhala.")
+        ttk.Label(parent, textvariable=self.colour_status, style="Dim.TLabel",
+                  wraplength=660).pack(anchor="w", pady=(8, 0))
+        self._sync_colour_mode()
+
+    def _sync_colour_mode(self):
+        if self.colour_mode.get() == "auto":
+            self.single_box.pack_forget()
+            self.auto_box.pack(fill="x", pady=(10, 0))
+        else:
+            self.auto_box.pack_forget()
+            self.single_box.pack(fill="x", pady=(10, 0))
+        self.settings["colour_mode"] = self.colour_mode.get()
+        self._persist()
+
+    def _pick_auto_colour(self, key):
+        picked = colorchooser.askcolor(
+            color=self.auto_hex.get(key) or "#FFD700", parent=self.root,
+            title="Colour for this category")[1]
+        if picked:
+            self.auto_hex[key] = picked
+            self.auto_swatches[key].configure(bg=picked)
+            self.auto_vars[key].set(True)
+            self._persist()
+
+    def _colour_browse(self):
+        path = filedialog.askopenfilename(
+            title="Choose a subtitle file",
+            filetypes=[("SubRip subtitles", "*.srt"), ("All files", "*.*")])
+        if path:
+            self.colour_input.set(path)
+
+    def _current_scheme(self):
+        return {k: self.auto_hex.get(k, "")
+                for k in self.auto_vars
+                if self.auto_vars[k].get() and self.auto_hex.get(k)}
+
+    def _colourise(self, subs):
+        """Return a list of coloured cue texts for the loaded file."""
+        if self.colour_mode.get() == "single":
+            return [colorize.colour_line(c.text, self.color_hex) for c in subs]
+        scheme = self._current_scheme()
+        names = (colorize.find_names([c.text for c in subs])
+                 if scheme.get("name") else set())
+        return [colorize.auto_colour_line(c.text, scheme, names) for c in subs]
+
+    def _load_colour_input(self):
+        path = self.colour_input.get().strip()
+        if not path or not os.path.isfile(path):
+            messagebox.showerror("SinhalaSub", "Choose an existing .srt file first.")
+            return None, None
+        try:
+            return load_srt(path), path
+        except Exception as exc:
+            messagebox.showerror("SinhalaSub", "Could not read that file:\n%s" % exc)
+            return None, None
+
+    def preview_colours(self):
+        subs, _ = self._load_colour_input()
+        if subs is None:
+            return
+        coloured = self._colourise(subs)
+        win = tk.Toplevel(self.root)
+        win.title("Colour preview - first 15 cues")
+        win.geometry("720x460")
+        win.configure(bg=BG)
+        text = tk.Text(win, wrap="word", font=SINHALA_FONT, bg=CARD, fg=TEXT,
+                       relief="flat", highlightthickness=0, padx=12, pady=10)
+        text.pack(fill="both", expand=True)
+        for i in range(min(15, len(subs))):
+            body = coloured[i]
+            shown = re.sub(r"</?font[^>]*>", "", body)
+            hexes = re.findall(r'color="(#[0-9A-Fa-f]{6})"', body)
+            tag = None
+            if hexes:
+                tag = "c%s" % hexes[0].lstrip("#")
+                text.tag_configure(tag, foreground=hexes[0])
+            text.insert("end", "%d  %s\n" % (subs[i].index, colorize.classify(subs[i].text)),
+                        ())
+            text.insert("end", "%s\n\n" % shown, (tag,) if tag else ())
+        text.configure(state="disabled")
+        win.transient(self.root)
+
+    def apply_colours(self):
+        subs, path = self._load_colour_input()
+        if subs is None:
+            return
+        coloured = self._colourise(subs)
+        base = path[:-4] if path.lower().endswith(".srt") else path
+        out = unused_path(base + ".coloured.srt")
+        try:
+            for cue, body in zip(subs, coloured):
+                cue.text = body
+            subs.save(out, encoding="utf-8")
+        except Exception as exc:
+            messagebox.showerror("SinhalaSub", "Could not write the file:\n%s" % exc)
+            return
+        self._persist()
+        self.colour_status.set("Saved: %s" % out)
+        messagebox.showinfo("SinhalaSub", "Saved:\n%s" % out)
 
     def _build_opensubtitles(self, parent):
         if self._os_panel is not None:

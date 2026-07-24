@@ -415,6 +415,9 @@ def build_active_provider(settings, secrets=None, cli_path=None):
     """Build the provider the user selected, resolving key/model/base_url."""
     desc = provider_by_key((settings or {}).get("provider", "cli"))
     key = desc["key"]
+    if key == "google":
+        return GoogleTranslateProvider(
+            glossary=(settings or {}).get("glossary") or {})
     if key == "cli":
         return make_provider("cli", model=(settings or {}).get("model") or "CLI default",
                              cli_path=cli_path)
