@@ -153,6 +153,26 @@ def flatten(text):
     return " ".join(text.split())
 
 
+# Cues that carry no translatable words: [door slams], bare music notes, and
+# lines with no letters at all (timestamps, numbers, dashes). Sending these to
+# the model wastes tokens and time - the model just echoes them back - so they
+# are filtered out locally and copied through unchanged.
+_NOTE_ONLY_RE = re.compile(r"^[\s\W\d_]*$", re.UNICODE)
+_LETTER_RE = re.compile(r"[^\W\d_]", re.UNICODE)
+
+
+def needs_translation(text):
+    """True if the cue contains real words that a model should translate."""
+    t = flatten(text or "")
+    if not t:
+        return False
+    if BRACKET_RE.match(t):          # [door slams], [music]
+        return False
+    if not _LETTER_RE.search(t):     # ♪♪, "1985", "- ...", punctuation only
+        return False
+    return True
+
+
 def make_batches(total, batch_size=None):
     """Split cue positions 0..total-1 into consecutive batches."""
     batch_size = batch_size or BATCH_SIZE
@@ -267,18 +287,57 @@ def translate_all(subs, provider, progress=None, log=None, workers=None,
             i = int(i)
             if 0 <= i < len(texts):
                 texts[i] = t
-    todo = []
-    for b in make_batches(len(subs), batch_size):
-        if any(texts[i] is None for i in b):
-            todo.append((b, {i for i in b if texts[i] is not None}))
+
+    # Cues with no translatable words ([music], bare notes, numbers) never go to
+    # the model - copy them through untouched. Pure token/time savings.
+    for i, cue in enumerate(subs):
+        if texts[i] is None and not needs_translation(cue.text):
+            texts[i] = cue.text
+
+    # Deduplicate: identical source lines ("Yeah.", "Okay.") are translated once
+    # and the result is copied to every other occurrence after the run. Movies
+    # repeat short lines heavily, so this cuts real work substantially.
+    dup_of = {}
+    first_seen = {}
+    for i, cue in enumerate(subs):
+        if texts[i] is not None:
+            continue
+        key = flatten(cue.text)
+        if key in first_seen:
+            dup_of[i] = first_seen[key]
+        else:
+            first_seen[key] = i
+
+    def fan_out_duplicates():
+        for pos, rep in dup_of.items():
+            if texts[pos] is None:
+                texts[pos] = (texts[rep] if texts[rep] is not None
+                              else subs[pos].text)
+
+    # Batch over the work itself, not over cue positions. Position-ranges meant
+    # that every already-known cue (memory hit, duplicate, sound cue) still had
+    # to be sent as context, so a "100-cue batch" could carry only a handful of
+    # real translations while paying input tokens for all 100. Packing batches
+    # with real work only is the single biggest token and time saving here.
+    work = [i for i in range(len(subs)) if texts[i] is None and i not in dup_of]
+    n_workers = max(1, workers or MAX_WORKERS)
+    if batch_size:
+        size = max(1, batch_size)
+    else:
+        # Auto: spread the work evenly over the workers so every worker gets one
+        # batch and the whole run finishes in a single round. Wall-clock is then
+        # (work / workers) x per-line cost instead of several sequential rounds.
+        size = max(20, min(250, -(-len(work) // n_workers)))
+    todo = [work[k:k + size] for k in range(0, len(work), size)]
     if not todo:
+        fan_out_duplicates()
         return texts
     done = 0
     first_error = None
     user_cancelled = False
     with ThreadPoolExecutor(max_workers=max(1, workers or MAX_WORKERS)) as ex:
-        futures = [ex.submit(translate_batch, subs, b, provider, log, stop, skip)
-                   for b, skip in todo]
+        futures = [ex.submit(translate_batch, subs, b, provider, log, stop, None)
+                   for b in todo]
         for fut in as_completed(futures):
             try:
                 result = fut.result()
@@ -301,6 +360,7 @@ def translate_all(subs, provider, progress=None, log=None, workers=None,
         raise first_error
     if user_cancelled or stop.is_set():
         raise TranslationCancelled()
+    fan_out_duplicates()
     return texts
 
 
@@ -672,9 +732,10 @@ class SinhalaSubApp:
         ttk.Spinbox(opts, from_=1, to=20, textvariable=self.workers_var,
                     width=4, state="readonly").pack(side="left", padx=6)
         ttk.Label(opts, text="Cues per batch", style="Dim.TLabel").pack(side="left", padx=(18, 0))
-        self.batch_var = tk.StringVar(value=str(self.settings.get("batch_size", BATCH_SIZE)))
-        ttk.Spinbox(opts, from_=10, to=100, increment=5, textvariable=self.batch_var,
-                    width=4, state="readonly").pack(side="left", padx=6)
+        self.batch_var = tk.StringVar(value=str(self.settings.get("batch_size", "Auto")))
+        ttk.Combobox(opts, textvariable=self.batch_var, state="readonly", width=6,
+                     values=["Auto", "30", "50", "100", "150", "250"]).pack(
+            side="left", padx=6)
 
         ttk.Label(main, style="Dim.TLabel", wraplength=660,
                   text="Tip: \"CLI default\" follows your Claude Code /model setting "
@@ -1071,9 +1132,9 @@ class SinhalaSubApp:
         except ValueError:
             workers = providers.default_workers(self.provider_key)
         try:
-            batch_size = max(5, min(100, int(self.batch_var.get())))
+            batch_size = max(5, min(250, int(self.batch_var.get())))
         except ValueError:
-            batch_size = BATCH_SIZE
+            batch_size = None  # "Auto": sized from the work and worker count
 
         self.subs = subs
         self.texts = None

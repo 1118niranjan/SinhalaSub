@@ -14,7 +14,7 @@ def test_make_provider_uses_default_model_when_none():
 
 
 def test_default_workers():
-    assert providers.default_workers("cli") == 3
+    assert providers.default_workers("cli") == 10
     assert providers.default_workers("openai") == 10
 
 

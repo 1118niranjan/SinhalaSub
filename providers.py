@@ -18,9 +18,12 @@ SECRETS_PATH = os.path.join(_HERE, "secrets.json")
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 PROVIDERS = [
+    # 10 workers: measured cost is ~1.9s per translated line of inference, so
+    # wall-clock is dominated by how many lines are in flight at once, not by
+    # process startup (~6s, ~11% of a batch). Parallelism costs no extra tokens.
     {"key": "cli", "label": "Claude Code CLI", "needs_key": False,
      "default_model": "CLI default", "env_key": None, "env_base": None,
-     "default_base_url": None, "default_workers": 3},
+     "default_base_url": None, "default_workers": 10},
     {"key": "gemini-cli", "label": "Gemini CLI (Google login)", "needs_key": False,
      "default_model": "gemini-2.5-flash", "env_key": None, "env_base": None,
      "default_base_url": None, "default_workers": 4},

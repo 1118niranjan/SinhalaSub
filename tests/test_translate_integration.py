@@ -38,15 +38,25 @@ def _subs(n):
     return subs
 
 
-def test_translate_all_uses_provider_and_aligns(monkeypatch):
-    monkeypatch.setattr(sinhalasub, "BATCH_SIZE", 3)
+def test_translate_all_uses_provider_and_aligns():
     subs = _subs(7)
     prov = FakeProvider()
-    texts = sinhalasub.translate_all(subs, prov, workers=2)
+    texts = sinhalasub.translate_all(subs, prov, workers=2, batch_size=3)
     assert len(texts) == 7
     assert texts[0] == "SI-1"
     assert texts[6] == "SI-7"
-    assert prov.calls >= 3  # 7 cues / batch size 3 => 3 batches
+    assert prov.calls == 3  # 7 unique lines / batch size 3 => 3 batches
+
+
+def test_auto_batching_packs_work_into_one_round_per_worker():
+    """With batch_size unset, work is spread so each worker gets one batch."""
+    subs = _subs(120)
+    prov = FakeProvider()
+    texts = sinhalasub.translate_all(subs, prov, workers=4)  # no batch_size
+    assert len(texts) == 120
+    assert all(t is not None for t in texts)
+    # 120 unique lines over 4 workers => 30 per batch => 4 calls, one round
+    assert prov.calls == 4
 
 
 def test_translate_all_respects_batch_size():
