@@ -78,3 +78,25 @@ def test_returns_none_when_no_video_resembles_the_subtitle(tmp_path):
 def test_returns_none_for_folder_with_no_video(tmp_path):
     srt = _srt(tmp_path, "Movie.2021.srt")
     assert _Finder().find_video_for(srt) is None
+
+
+# ----- review: finding the English original ----------------------------------
+
+def test_finds_english_original_next_to_si_file(tmp_path):
+    en = tmp_path / "Movie.srt"
+    si = tmp_path / "Movie.si.srt"
+    en.write_text("1\n00:00:01,000 --> 00:00:02,000\nhi\n", encoding="utf-8")
+    si.write_text("1\n00:00:01,000 --> 00:00:02,000\nහායි\n", encoding="utf-8")
+    assert _Finder.english_original_for(str(si)) == str(en)
+
+
+def test_no_english_original_for_a_plain_srt(tmp_path):
+    p = tmp_path / "Movie.srt"
+    p.write_text("x", encoding="utf-8")
+    assert _Finder.english_original_for(str(p)) is None
+
+
+def test_no_english_original_when_the_pair_is_missing(tmp_path):
+    si = tmp_path / "Movie.si.srt"
+    si.write_text("x", encoding="utf-8")
+    assert _Finder.english_original_for(str(si)) is None

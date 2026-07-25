@@ -61,6 +61,12 @@ def save_secrets(data, path=None):
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        # API keys live here, so keep the file readable by this user only
+        # instead of inheriting whatever the folder allows.
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass  # best effort; some filesystems do not support it
     except OSError:
         pass
 

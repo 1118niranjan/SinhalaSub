@@ -541,6 +541,11 @@ def os_download(key, file_id, dest_path):
     link = resp.json().get("link")
     if not link:
         raise RuntimeError("OpenSubtitles returned no download link")
+    # Only follow an encrypted link. The URL comes from a remote service, so a
+    # compromised or tampered response must not be able to downgrade us to
+    # plain HTTP or point at a local file:// path.
+    if not str(link).lower().startswith("https://"):
+        raise RuntimeError("Refusing a non-HTTPS download link from OpenSubtitles")
     data = requests.get(link, timeout=60)
     data.raise_for_status()
     with open(dest_path, "wb") as f:
@@ -734,9 +739,11 @@ class SinhalaSubApp:
         nb.pack(fill="both", expand=True)
         main = ttk.Frame(nb, padding=16)
         colour_tab = ttk.Frame(nb, padding=16)
+        review_tab = ttk.Frame(nb, padding=16)
         batch_tab = ttk.Frame(nb, padding=16)
         timing_tab = ttk.Frame(nb, padding=16)
         nb.add(main, text="Translate")
+        nb.add(review_tab, text="Review & Fix")
         nb.add(colour_tab, text="Colour & Style")
         nb.add(batch_tab, text="Batch")
         nb.add(timing_tab, text="Timing")
@@ -791,6 +798,7 @@ class SinhalaSubApp:
         ttk.Label(main, textvariable=self.status_var, style="Dim.TLabel",
                   wraplength=660).pack(anchor="w", pady=(8, 0))
 
+        self._build_review_tab(review_tab)
         self._build_colour_tab(colour_tab)
         self._build_batch_tab(batch_tab)
         self._build_timing_tab(timing_tab)
@@ -1352,6 +1360,189 @@ class SinhalaSubApp:
         else:
             self.video_var.set("")
 
+    # ----- Review & Fix tab -------------------------------------------------
+
+    def _build_review_tab(self, parent):
+        ttk.Label(parent, style="Dim.TLabel", wraplength=700,
+                  text="Open a translated .srt beside its English original, fix any "
+                       "line, and the fix is remembered forever - the same line is "
+                       "never mistranslated again, on any movie.").pack(anchor="w")
+
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=(8, 0))
+        ttk.Label(row, text="Sinhala .srt:").pack(side="left")
+        self.review_input = tk.StringVar()
+        ttk.Entry(row, textvariable=self.review_input).pack(
+            side="left", fill="x", expand=True, padx=8)
+        ttk.Button(row, text="Browse...", command=self._review_browse).pack(side="left")
+        ttk.Button(row, text="Load", command=self.load_review).pack(
+            side="left", padx=(6, 0))
+
+        filt = ttk.Frame(parent)
+        filt.pack(fill="x", pady=(8, 0))
+        self.review_only_issues = tk.BooleanVar(value=False)
+        ttk.Checkbutton(filt, text="Show only lines with a quality problem",
+                        variable=self.review_only_issues,
+                        command=self._fill_review).pack(side="left")
+
+        body = ttk.Frame(parent)
+        body.pack(fill="both", expand=True, pady=(10, 0))
+        self.review_list = tk.Listbox(
+            body, height=10, bg=FIELD, fg=TEXT, selectbackground=ACCENT,
+            selectforeground="#ffffff", relief="flat", highlightthickness=0,
+            borderwidth=0, exportselection=False, font=SINHALA_FONT)
+        bar = ttk.Scrollbar(body, command=self.review_list.yview)
+        self.review_list.configure(yscrollcommand=bar.set)
+        bar.pack(side="right", fill="y")
+        self.review_list.pack(side="left", fill="both", expand=True)
+        self.review_list.bind("<<ListboxSelect>>", self._on_review_select)
+
+        ttk.Label(parent, text="English", style="Dim.TLabel").pack(
+            anchor="w", pady=(10, 0))
+        self.review_src = tk.Text(parent, height=2, wrap="word", bg=CARD, fg=DIM,
+                                  relief="flat", highlightthickness=0, padx=8,
+                                  pady=5, font=("Segoe UI", 9))
+        self.review_src.pack(fill="x")
+        self.review_src.configure(state="disabled")
+
+        ttk.Label(parent, text="Sinhala (edit me)", style="Dim.TLabel").pack(
+            anchor="w", pady=(8, 0))
+        self.review_edit = tk.Text(parent, height=3, wrap="word", bg=FIELD, fg=TEXT,
+                                   relief="flat", highlightthickness=0, padx=8,
+                                   pady=5, insertbackground=TEXT, font=SINHALA_FONT)
+        self.review_edit.pack(fill="x")
+
+        act = ttk.Frame(parent)
+        act.pack(fill="x", pady=(10, 0))
+        ttk.Button(act, text="Save this fix", style="Accent.TButton",
+                   command=self.save_review_fix).pack(side="left")
+        ttk.Button(act, text="Save file", command=self.save_review_file).pack(
+            side="left", padx=8)
+        self.review_status = tk.StringVar(
+            value="Load a translated subtitle to review it.")
+        ttk.Label(parent, textvariable=self.review_status, style="Dim.TLabel",
+                  wraplength=700).pack(anchor="w", pady=(8, 0))
+
+        self._review_subs = None      # the Sinhala file being reviewed
+        self._review_src_subs = None  # its English original, when found
+        self._review_rows = []        # listbox row -> cue position
+
+    def _review_browse(self):
+        path = filedialog.askopenfilename(
+            title="Choose a translated .srt",
+            filetypes=[("SubRip subtitles", "*.srt"), ("All files", "*.*")])
+        if path:
+            self.review_input.set(path)
+            self.load_review()
+
+    @staticmethod
+    def english_original_for(si_path):
+        """The English file a .si.srt came from, if it is still alongside it."""
+        low = si_path.lower()
+        if low.endswith(".si.srt"):
+            candidate = si_path[: -len(".si.srt")] + ".srt"
+            if os.path.isfile(candidate):
+                return candidate
+        return None
+
+    def load_review(self):
+        path = self.review_input.get().strip()
+        if not path or not os.path.isfile(path):
+            messagebox.showerror("SinhalaSub", "Choose an existing .srt file first.")
+            return
+        try:
+            self._review_subs = load_srt(path)
+        except Exception as exc:
+            messagebox.showerror("SinhalaSub", "Could not read that file:\n%s" % exc)
+            return
+        english = self.english_original_for(path)
+        self._review_src_subs = None
+        if english:
+            try:
+                src = load_srt(english)
+                if len(src) == len(self._review_subs):
+                    self._review_src_subs = src
+            except Exception:  # noqa: BLE001 - reviewing works without it
+                pass
+        self._fill_review()
+
+    def _fill_review(self):
+        subs = self._review_subs
+        self.review_list.delete(0, "end")
+        self._review_rows = []
+        if subs is None:
+            return
+        flagged = set()
+        if self.review_only_issues.get():
+            flagged = {i.index for i in quality.check(subs)}
+        for pos, cue in enumerate(subs):
+            if flagged and cue.index not in flagged:
+                continue
+            self._review_rows.append(pos)
+            self.review_list.insert(
+                "end", "%4d  %s" % (cue.index, flatten(cue.text)[:70]))
+        note = "" if not flagged else " (showing %d flagged)" % len(self._review_rows)
+        src_note = ("English original found - shown for each line."
+                    if self._review_src_subs else
+                    "English original not found; editing Sinhala only.")
+        self.review_status.set("%d cues%s. %s" % (len(subs), note, src_note))
+
+    def _on_review_select(self, _event=None):
+        sel = self.review_list.curselection()
+        if not sel or self._review_subs is None:
+            return
+        pos = self._review_rows[sel[0]]
+        self.review_src.configure(state="normal")
+        self.review_src.delete("1.0", "end")
+        if self._review_src_subs is not None:
+            self.review_src.insert("1.0", flatten(self._review_src_subs[pos].text))
+        self.review_src.configure(state="disabled")
+        self.review_edit.delete("1.0", "end")
+        self.review_edit.insert("1.0", self._review_subs[pos].text)
+
+    def save_review_fix(self):
+        """Apply the edit to the file and remember it as a permanent correction."""
+        sel = self.review_list.curselection()
+        if not sel or self._review_subs is None:
+            messagebox.showinfo("SinhalaSub", "Select a line to fix first.")
+            return
+        pos = self._review_rows[sel[0]]
+        new_text = self.review_edit.get("1.0", "end").strip()
+        if not new_text:
+            messagebox.showinfo("SinhalaSub", "The Sinhala text cannot be empty.")
+            return
+        self._review_subs[pos].text = new_text
+
+        saved_note = "kept in this file only"
+        if self._review_src_subs is not None:
+            english = flatten(self._review_src_subs[pos].text)
+            if english:
+                try:
+                    get_memory().save_correction(english, new_text)
+                    saved_note = "remembered for every future movie"
+                except sqlite3.Error:
+                    pass
+        self._fill_review()
+        if sel[0] < self.review_list.size():
+            self.review_list.selection_set(sel[0])
+        self.review_status.set("Line %d fixed - %s."
+                               % (self._review_subs[pos].index, saved_note))
+
+    def save_review_file(self):
+        if self._review_subs is None:
+            messagebox.showinfo("SinhalaSub", "Load a file first.")
+            return
+        path = self.review_input.get().strip()
+        base = path[:-4] if path.lower().endswith(".srt") else path
+        out = unused_path(base + ".fixed.srt")
+        try:
+            self._review_subs.save(out, encoding="utf-8")
+        except Exception as exc:
+            messagebox.showerror("SinhalaSub", "Could not write the file:\n%s" % exc)
+            return
+        self.review_status.set("Saved: %s" % out)
+        messagebox.showinfo("SinhalaSub", "Saved:\n%s" % out)
+
     # ----- Batch tab --------------------------------------------------------
 
     def _build_batch_tab(self, parent):
@@ -1453,19 +1644,34 @@ class SinhalaSubApp:
             workers = max(1, min(20, int(self.workers_var.get())))
         except ValueError:
             workers = providers.default_workers(self.provider_key)
+        use_memory = bool(self.memory_var.get())
+        base_tier = memory_db.engine_tier(self.provider_key)
         done = 0
         for path in files:
             if self.cancel_event.is_set():
                 break
             self.msgs.put(("batch_status", "Translating %s (%d/%d)"
                            % (os.path.basename(path), done + 1, len(files))))
+            started = time.time()
             try:
                 subs = load_srt(path)
+                initial = (memory_prefill(subs, min_tier=base_tier)
+                           if use_memory else {})
                 texts = translate_all(subs, provider, workers=workers,
-                                      cancel=self.cancel_event)
-                if self.color_hex:
-                    texts = [colorize.colour_line(t, self.color_hex) for t in texts]
-                write_output(subs, texts, unused_path(default_output_path(path)))
+                                      cancel=self.cancel_event, initial=initial)
+                # Feed the database from batch runs too, so a season builds up
+                # memory the same way single files do.
+                if use_memory:
+                    try:
+                        self._remember(subs, texts, provider, base_tier)
+                        get_memory().record_run(
+                            path, engine=self.provider_key, cues=len(subs),
+                            seconds=time.time() - started)
+                    except sqlite3.Error:
+                        pass
+                out_texts = ([colorize.colour_line(t, self.color_hex) for t in texts]
+                             if self.color_hex else texts)
+                write_output(subs, out_texts, unused_path(default_output_path(path)))
             except TranslationCancelled:
                 break
             except Exception as exc:  # noqa: BLE001 - keep going through the list
@@ -1475,6 +1681,19 @@ class SinhalaSubApp:
             done += 1
             self.msgs.put(("batch_progress", done))
         self.msgs.put(("batch_done", done, len(files)))
+
+    def _remember(self, subs, texts, provider, base_tier):
+        """Store a finished translation, tiering each line by what produced it."""
+        pairs = memory_collect(subs, texts)
+        if not pairs:
+            return
+        mem = get_memory()
+        polished = getattr(provider, "polished_sources", None) or set()
+        if polished:
+            mem.store({s: t for s, t in pairs.items() if s in polished},
+                      engine=self.provider_key + "+llm", tier="llm")
+            pairs = {s: t for s, t in pairs.items() if s not in polished}
+        mem.store(pairs, engine=self.provider_key, tier=base_tier)
 
     # ----- Timing tab -------------------------------------------------------
 
@@ -2033,24 +2252,15 @@ class SinhalaSubApp:
         note = ""
         if pairs:
             try:
+                # A hybrid run mixes machine and LLM output, so each line is
+                # stored at the quality that actually produced it.
+                self._remember(self.subs, self.texts, self.provider,
+                               memory_db.engine_tier(self.provider_key))
                 mem = get_memory()
-                base_tier = memory_db.engine_tier(self.provider_key)
-                # A hybrid run mixes machine and LLM output. Store each line at
-                # the quality that actually produced it, so the hard lines the
-                # LLM solved come back free on later runs and the cheap ones do
-                # not masquerade as high quality.
-                polished = getattr(self.provider, "polished_sources", None) or set()
-                if polished:
-                    llm_pairs = {s: t for s, t in pairs.items() if s in polished}
-                    rest = {s: t for s, t in pairs.items() if s not in polished}
-                    mem.store(llm_pairs, engine=self.provider_key + "+llm", tier="llm")
-                    total = mem.store(rest, engine=self.provider_key, tier=base_tier)
-                else:
-                    total = mem.store(pairs, engine=self.provider_key, tier=base_tier)
                 mem.record_run(src, engine=self.provider_key, cues=len(self.subs),
                                seconds=(time.time() - self.t_start)
                                if self.t_start else 0)
-                note = " · memory now holds %d lines" % total
+                note = " · memory now holds %d lines" % mem.stats()["lines"]
             except sqlite3.Error:
                 pass
 
