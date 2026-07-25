@@ -2,27 +2,25 @@ import providers
 
 
 def test_make_provider_types():
-    assert isinstance(providers.make_provider("cli", cli_path="c"), providers.CliProvider)
-    assert isinstance(providers.make_provider("anthropic", api_key="k"), providers.AnthropicProvider)
-    assert isinstance(providers.make_provider("gemini", api_key="k"), providers.GeminiProvider)
+    assert isinstance(providers.make_provider("google"), providers.GoogleTranslateProvider)
+    assert isinstance(providers.make_provider("hybrid"), providers.HybridProvider)
     assert isinstance(providers.make_provider("openai", api_key="k"), providers.OpenAIProvider)
 
 
 def test_make_provider_uses_default_model_when_none():
-    prov = providers.make_provider("anthropic", api_key="k")
-    assert prov.model == "claude-haiku-4-5"
+    prov = providers.make_provider("openai", api_key="k")
+    assert prov.model == "openrouter/free"
 
 
 def test_default_workers():
-    assert providers.default_workers("cli") == 10
+    assert providers.default_workers("google") == 20
     assert providers.default_workers("openai") == 10
 
 
-def test_build_active_provider_cli(monkeypatch):
+def test_build_active_provider_hybrid(monkeypatch):
     monkeypatch.setattr(providers.shutil, "which", lambda name: "claude.cmd")
-    prov = providers.build_active_provider({"provider": "cli", "model": "sonnet"})
-    assert isinstance(prov, providers.CliProvider)
-    assert prov.model == "sonnet"
+    prov = providers.build_active_provider({"provider": "hybrid"})
+    assert isinstance(prov, providers.HybridProvider)
 
 
 def test_build_active_provider_openai_reads_settings_and_key():
@@ -38,7 +36,6 @@ def test_build_active_provider_openai_reads_settings_and_key():
     assert prov.api_key == "sk-x"
 
 
-def test_build_active_provider_defaults_to_cli_for_unknown(monkeypatch):
-    monkeypatch.setattr(providers.shutil, "which", lambda name: "claude.cmd")
+def test_build_active_provider_defaults_to_google(monkeypatch):
     prov = providers.build_active_provider({})
-    assert isinstance(prov, providers.CliProvider)
+    assert isinstance(prov, providers.GoogleTranslateProvider)

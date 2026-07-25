@@ -18,41 +18,31 @@ SECRETS_PATH = os.path.join(_HERE, "secrets.json")
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 PROVIDERS = [
-    # 10 workers: measured cost is ~1.9s per translated line of inference, so
-    # wall-clock is dominated by how many lines are in flight at once, not by
-    # process startup (~6s, ~11% of a batch). Parallelism costs no extra tokens.
-    {"key": "cli", "label": "Claude Code CLI", "needs_key": False,
-     "default_model": "CLI default", "env_key": None, "env_base": None,
-     "default_base_url": None, "default_workers": 10},
     # Free machine translation: no key, no usage, and it parallelises cleanly,
     # so it is by far the fastest option (whole movie in a couple of minutes).
     {"key": "google", "label": "Google Translate (free, fast)", "needs_key": False,
      "default_model": "google-translate", "env_key": None, "env_base": None,
      "default_base_url": None, "default_workers": 20},
-    {"key": "hybrid", "label": "Google + Claude polish (best mix)", "needs_key": False,
+    # Google does the bulk; the Claude CLI re-does only the hardest lines.
+    {"key": "hybrid", "label": "Google + Claude polish", "needs_key": False,
      "default_model": "hybrid", "env_key": None, "env_base": None,
-     "default_base_url": None, "default_workers": 6},
-    {"key": "gemini-cli", "label": "Gemini CLI (Google login)", "needs_key": False,
-     "default_model": "gemini-2.5-flash", "env_key": None, "env_base": None,
-     "default_base_url": None, "default_workers": 4},
-    {"key": "anthropic", "label": "Anthropic API", "needs_key": True,
-     "default_model": "claude-haiku-4-5", "env_key": "ANTHROPIC_API_KEY",
-     "env_base": None, "default_base_url": None, "default_workers": 10},
-    {"key": "gemini", "label": "Google Gemini", "needs_key": True,
-     "default_model": "gemini-2.5-flash", "env_key": "GEMINI_API_KEY",
-     "env_base": None, "default_base_url": None, "default_workers": 10},
-    {"key": "openai", "label": "OpenAI / Local LLM", "needs_key": True,
-     "default_model": "gpt-4o-mini", "env_key": "OPENAI_API_KEY",
-     "env_base": "OPENAI_BASE_URL", "default_base_url": "https://api.openai.com/v1",
+     "default_base_url": None, "default_workers": 10},
+    # One entry covers OpenAI, OpenRouter and any local model (Ollama, LM Studio).
+    {"key": "openai", "label": "OpenRouter / OpenAI / Local", "needs_key": True,
+     "default_model": "openrouter/free", "env_key": "OPENAI_API_KEY",
+     "env_base": "OPENAI_BASE_URL", "default_base_url": "https://openrouter.ai/api/v1",
      "default_workers": 10},
 ]
 
 _BY_KEY = {p["key"]: p for p in PROVIDERS}
 
 
+DEFAULT_PROVIDER = "google"
+
+
 def provider_by_key(key):
-    """Return a provider descriptor, defaulting to the CLI provider."""
-    return _BY_KEY.get(key) or _BY_KEY["cli"]
+    """Return a provider descriptor, defaulting to the fast free engine."""
+    return _BY_KEY.get(key) or _BY_KEY[DEFAULT_PROVIDER]
 
 
 def load_secrets(path=None):
@@ -146,43 +136,6 @@ class CliProvider(Provider):
         return result.stdout
 
 
-class GeminiCliProvider(Provider):
-    """Runs Google's Gemini CLI headlessly, using its Google-account login.
-
-    No API key: the user runs `gemini` once and picks "Login with Google" (free
-    tier). We spawn `gemini -p <instruction>` with the batch content on stdin,
-    exactly like the Claude CLI. Being a per-batch process spawn, it is slower
-    than the Gemini API but costs nothing and doesn't touch any Claude usage.
-    """
-
-    def __init__(self, model="gemini-2.5-flash", cli_path=None):
-        self.model = (model or "").strip()  # blank = the CLI's own default model
-        self.cli_path = cli_path or shutil.which("gemini")
-
-    def available(self):
-        return bool(self.cli_path)
-
-    def translate(self, prompt, stdin_text, timeout):
-        if not self.cli_path:
-            raise RuntimeError(
-                "gemini CLI not found on PATH. Install it with "
-                "'npm install -g @google/gemini-cli', then run 'gemini' once and "
-                "choose Login with Google.")
-        args = [self.cli_path, "-p", prompt]
-        if self.model:
-            args += ["-m", self.model]
-        result = subprocess.run(
-            args, input=stdin_text, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=timeout,
-            creationflags=_NO_WINDOW,
-        )
-        if result.returncode != 0:
-            err = ((result.stderr or "") + " " + (result.stdout or "")).strip()
-            raise RuntimeError(
-                "gemini CLI failed (exit %d): %s" % (result.returncode, err[:500]))
-        return result.stdout
-
-
 class HybridProvider(Provider):
     """Fast engine for everything, a better engine for the demanding lines.
 
@@ -192,19 +145,38 @@ class HybridProvider(Provider):
     which keeps the run quick and the usage small while lifting the hard parts.
     """
 
-    def __init__(self, fast, good, min_words=8):
+    # Wording that means "your Claude allowance is gone" rather than a transient
+    # glitch. Once we see it we stop polishing for the rest of the run instead of
+    # paying the CLI's slow startup on every remaining batch just to fail again.
+    _EXHAUSTED = ("usage limit", "rate limit", "quota", "429",
+                  "limit reached", "too many requests", "overloaded")
+
+    def __init__(self, fast, good, min_words=14, max_polish=8):
         self.fast = fast
         self.good = good
-        self.min_words = min_words
+        self.min_words = min_words      # only genuinely long lines get polished
+        self.max_polish = max_polish    # hard cap per batch, keeps runs quick
         self.model = "hybrid"
+        self.polish_disabled = False    # set once the allowance is exhausted
+        self.polished = 0
 
     def available(self):
         # The fast engine alone is enough to produce a complete file.
         return bool(self.fast and self.fast.available())
 
-    def translate(self, prompt, stdin_text, timeout):
-        import sinhalasub  # for parse_response; imported late to avoid a cycle
+    def _is_hard(self, text):
+        """A line worth spending an LLM call on: long and clause-heavy."""
+        words = text.split()
+        if len(words) < self.min_words:
+            return False
+        # Multiple clauses (commas / conjunctions) are where MT actually breaks.
+        return ("," in text or ";" in text
+                or any(w.lower() in ("that", "which", "because", "although",
+                                     "unless", "while", "before", "after",
+                                     "whether", "since")
+                       for w in words))
 
+    def translate(self, prompt, stdin_text, timeout):
         targets = GoogleTranslateProvider._targets(stdin_text)
         if not targets:
             return ""
@@ -214,22 +186,36 @@ class HybridProvider(Provider):
             if num.strip().isdigit():
                 merged[num.strip()] = body.strip()
 
-        hard = [(n, src) for n, src in targets
-                if len(src.split()) >= self.min_words]
-        if hard:
-            sub_stdin = ("TRANSLATE (%d lines - output exactly these numbers):\n"
-                         % len(hard))
-            sub_stdin += "".join("%s|||%s\n" % (n, s) for n, s in hard)
-            try:
-                out = self.good.translate(prompt, sub_stdin, timeout)
-                for line in out.splitlines():
-                    num, _, body = line.partition("|||")
-                    num, body = num.strip(), body.strip()
-                    if num.isdigit() and body:
-                        merged[num] = body
-            except Exception:  # noqa: BLE001 - keep the fast result on failure
-                pass
+        if self.polish_disabled:
+            return self._render(targets, merged)
 
+        hard = [(n, src) for n, src in targets if self._is_hard(src)]
+        # Longest first, so the cap spends the LLM on the worst offenders.
+        hard.sort(key=lambda p: -len(p[1].split()))
+        hard = hard[:self.max_polish]
+        if not hard:
+            return self._render(targets, merged)
+
+        sub_stdin = ("TRANSLATE (%d lines - output exactly these numbers):\n"
+                     % len(hard))
+        sub_stdin += "".join("%s|||%s\n" % (n, s) for n, s in hard)
+        try:
+            out = self.good.translate(prompt, sub_stdin, timeout)
+            for line in out.splitlines():
+                num, _, body = line.partition("|||")
+                num, body = num.strip(), body.strip()
+                if num.isdigit() and body:
+                    merged[num] = body
+            self.polished += len(hard)
+        except Exception as exc:  # noqa: BLE001 - the fast result still stands
+            msg = str(exc).lower()
+            if any(sig in msg for sig in self._EXHAUSTED):
+                # Allowance gone: finish the whole movie on Google alone.
+                self.polish_disabled = True
+        return self._render(targets, merged)
+
+    @staticmethod
+    def _render(targets, merged):
         return "\n".join("%s|||%s" % (n, merged.get(n, src))
                          for n, src in targets) + "\n"
 
@@ -333,76 +319,6 @@ class GoogleTranslateProvider(Provider):
         return "\n".join(lines) + "\n"
 
 
-class AnthropicProvider(Provider):
-    """Direct Claude API. The system prompt is prompt-cached across batches."""
-
-    URL = "https://api.anthropic.com/v1/messages"
-
-    def __init__(self, model, api_key, max_tokens=8000):
-        self.model = model
-        self.api_key = api_key
-        self.max_tokens = max_tokens
-
-    def available(self):
-        return bool(self.api_key)
-
-    def translate(self, prompt, stdin_text, timeout):
-        import requests  # lazy: CLI-only use never needs it
-        headers = {
-            "x-api-key": self.api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
-        body = {
-            "model": self.model,
-            "max_tokens": self.max_tokens,
-            "system": [{"type": "text", "text": prompt,
-                        "cache_control": {"type": "ephemeral"}}],
-            "messages": [{"role": "user", "content": stdin_text}],
-        }
-        resp = requests.post(self.URL, json=body, headers=headers, timeout=timeout)
-        if resp.status_code != 200:
-            raise RuntimeError("Anthropic API error %d: %s"
-                               % (resp.status_code, (resp.text or "")[:300]))
-        data = resp.json()
-        return "".join(b.get("text", "") for b in data.get("content", [])
-                       if b.get("type") == "text")
-
-
-class GeminiProvider(Provider):
-    """Google Gemini native generateContent API."""
-
-    BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-
-    def __init__(self, model, api_key, max_tokens=8000):
-        self.model = model
-        self.api_key = api_key
-        self.max_tokens = max_tokens
-
-    def available(self):
-        return bool(self.api_key)
-
-    def translate(self, prompt, stdin_text, timeout):
-        import requests
-        url = "%s/%s:generateContent?key=%s" % (self.BASE, self.model, self.api_key)
-        body = {
-            "system_instruction": {"parts": [{"text": prompt}]},
-            "contents": [{"role": "user", "parts": [{"text": stdin_text}]}],
-            "generationConfig": {"maxOutputTokens": self.max_tokens},
-        }
-        resp = requests.post(url, json=body, timeout=timeout)
-        if resp.status_code != 200:
-            raise RuntimeError("Gemini API error %d: %s"
-                               % (resp.status_code, (resp.text or "")[:300]))
-        data = resp.json()
-        cands = data.get("candidates", [])
-        if not cands:
-            raise RuntimeError("Gemini returned no candidates: %s"
-                               % (resp.text or "")[:200])
-        parts = cands[0].get("content", {}).get("parts", [])
-        return "".join(p.get("text", "") for p in parts)
-
-
 class OpenAIProvider(Provider):
     """Any OpenAI-compatible chat endpoint: OpenAI, OpenRouter, Ollama, LM Studio."""
 
@@ -445,17 +361,11 @@ def make_provider(key, *, model=None, api_key="", base_url=None, cli_path=None,
     desc = provider_by_key(key)
     key = desc["key"]
     model = model or desc["default_model"]
-    if key == "cli":
-        return CliProvider(model=model, cli_path=cli_path)
     if key == "google":
         return GoogleTranslateProvider(model=model)
-    if key == "gemini-cli":
-        # Self-resolves the 'gemini' binary; ignore any Claude cli_path passed in.
-        return GeminiCliProvider(model=model)
-    if key == "anthropic":
-        return AnthropicProvider(model=model, api_key=api_key, max_tokens=max_tokens)
-    if key == "gemini":
-        return GeminiProvider(model=model, api_key=api_key, max_tokens=max_tokens)
+    if key == "hybrid":
+        return HybridProvider(GoogleTranslateProvider(),
+                              CliProvider(cli_path=cli_path))
     return OpenAIProvider(model=model, api_key=api_key,
                           base_url=base_url or desc["default_base_url"],
                           max_tokens=max_tokens)
@@ -467,20 +377,19 @@ def default_workers(key):
 
 def build_active_provider(settings, secrets=None, cli_path=None):
     """Build the provider the user selected, resolving key/model/base_url."""
-    desc = provider_by_key((settings or {}).get("provider", "cli"))
+    settings = settings or {}
+    desc = provider_by_key(settings.get("provider", DEFAULT_PROVIDER))
     key = desc["key"]
-    gloss = (settings or {}).get("glossary") or {}
+    gloss = settings.get("glossary") or {}
     if key == "google":
         return GoogleTranslateProvider(glossary=gloss)
     if key == "hybrid":
         return HybridProvider(
             GoogleTranslateProvider(glossary=gloss),
-            CliProvider(model=(settings or {}).get("model") or "CLI default",
-                        cli_path=cli_path))
-    if key == "cli":
-        return make_provider("cli", model=(settings or {}).get("model") or "CLI default",
-                             cli_path=cli_path)
-    pconf = ((settings or {}).get("providers") or {}).get(key, {})
+            CliProvider(model=settings.get("model") or "CLI default",
+                        cli_path=cli_path),
+            min_words=int(settings.get("polish_min_words") or 14))
+    pconf = (settings.get("providers") or {}).get(key, {})
     model = pconf.get("model") or desc["default_model"]
     base_url = pconf.get("base_url") or desc.get("default_base_url")
     api_key = resolve_api_key(key, secrets)

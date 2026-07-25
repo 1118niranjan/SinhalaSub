@@ -76,6 +76,55 @@ def test_polish_failure_falls_back_to_the_fast_result():
     assert "FAST(" in out  # never lose the line just because polish failed
 
 
+def test_usage_limit_disables_polish_for_the_rest_of_the_run():
+    calls = {"n": 0}
+
+    class Exhausted(Good):
+        def translate(self, prompt, stdin_text, timeout):
+            calls["n"] += 1
+            raise RuntimeError("Claude usage limit reached")
+
+    long_line = "He told me that the whole story was true, before anyone arrived"
+    prov = providers.HybridProvider(Fast(), Exhausted(), min_words=6)
+    for _ in range(4):
+        out = prov.translate("P", "TRANSLATE:\n1|||%s\n" % long_line, 60)
+        assert "FAST(" in out          # every batch still completes
+    assert prov.polish_disabled is True
+    assert calls["n"] == 1             # gave up after the first refusal
+
+
+def test_transient_error_does_not_disable_polish():
+    class Flaky(Good):
+        def translate(self, prompt, stdin_text, timeout):
+            raise RuntimeError("connection reset")
+
+    long_line = "He told me that the whole story was true, before anyone arrived"
+    prov = providers.HybridProvider(Fast(), Flaky(), min_words=6)
+    prov.translate("P", "TRANSLATE:\n1|||%s\n" % long_line, 60)
+    assert prov.polish_disabled is False
+
+
+def test_only_clause_heavy_long_lines_are_polished():
+    prov = providers.HybridProvider(Fast(), Good(), min_words=8)
+    simple_long = "one two three four five six seven eight nine ten"
+    assert prov._is_hard(simple_long) is False            # long but no clauses
+    assert prov._is_hard("He said that it would rain, and then it did indeed") is True
+
+
+def _stdin(pairs):
+    lines = ["TRANSLATE (%d lines):" % len(pairs)]
+    lines += ["%d|||%s" % (n, t) for n, t in pairs]
+    return "\n".join(lines) + "\n"
+
+
+def test_polish_is_capped_per_batch():
+    hard = "He said that this would happen, exactly as predicted before now"
+    pairs = [(i, hard) for i in range(1, 21)]
+    prov = providers.HybridProvider(Fast(), Good(), min_words=6, max_polish=3)
+    prov.translate("P", _stdin(pairs), 60)
+    assert len(Good.seen) == 3  # only the 3 worst lines cost an LLM call
+
+
 def test_available_requires_only_the_fast_engine():
     class Down:
         def available(self):
