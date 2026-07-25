@@ -1,167 +1,212 @@
+<div align="center">
+
+<img src="assets/logo.png" width="120" alt="SinhalaSub logo">
+
 # SinhalaSub
 
-Translate an English movie subtitle (`.srt`) into natural, meaning-based spoken
-Sinhala using the LLM backbone of your choice — the local `claude` CLI (default,
-no API key), the Anthropic API, Google Gemini, or **any** OpenAI-compatible or
-local model (OpenRouter, Ollama, LM Studio, LiteLLM).
+### Turn a movie subtitle from **any language** into natural, spoken **සිංහල** — in about four minutes, for free.
 
-*Created by NLK.*
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?logo=windows&logoColor=white)](#install)
+[![Tests](https://img.shields.io/badge/tests-145%20passing-4ade80)](#development)
+[![Cost](https://img.shields.io/badge/cost-free-4ade80)](#engines)
+[![Made by](https://img.shields.io/badge/made%20by-NLK-7c6cff)](#support)
 
-## Requirements
+*A desktop app that reads an `.srt`, understands the scene, and writes Sinhala a native speaker actually says — then remembers everything it learns.*
 
-- Windows, Python 3.11+
-- Claude Code installed and signed in (`claude -p "hi"` must work in a terminal)
-- `pip install -r requirements.txt` (pysrt + requests)
+<img src="docs/screenshots/01-translate.png" width="820" alt="SinhalaSub main window">
 
-## Run
+</div>
 
-```
+---
+
+## Why this exists
+
+Machine translation turns *"Get out of here, you idiot!"* into something stiff and wrong. Ask an LLM instead and the Sinhala is beautiful — but a two-hour movie takes **35 minutes** and burns your whole usage allowance.
+
+SinhalaSub does both. A free engine handles the bulk in minutes, an LLM is spent **only on the handful of genuinely hard lines**, and every result is saved so the *next* movie is faster and better than the last.
+
+| | Before | SinhalaSub |
+|---|---|---|
+| *"Get out of here, you idiot!"* | flat, literal | **මෙතනින් යන්න, මෝඩයා!** |
+| *"I was going to / tell you the truth"* | "මම **යන්න** හිටියේ" — wrong verb | **මම ඔබට ඇත්ත කියන්නයි හිටියේ** ✓ |
+| Full movie | ~35 min, usage gone | **~4 min, free** |
+
+---
+
+## Features
+
+| | |
+|---|---|
+| 🌍 **Any language → Sinhala** | English, Hindi, Tamil, Telugu, Korean, Japanese, Chinese… or let it auto-detect |
+| ⚡ **~4 minutes a movie** | Free engine, 20 requests in parallel |
+| 🧠 **It learns** | Fix a line once — it's never wrong again, in any movie |
+| 🎨 **Auto colour** | Names, sound cues, each speaker, shouting — each its own colour |
+| 📺 **Save for any TV** | SubRip, MicroDVD, WebVTT, ASS/SSA, plain text + encoding choice |
+| 📁 **Batch mode** | Point at a season folder and walk away |
+| ⏱ **Timing shift** | Fix out-of-sync subtitles in one click |
+| ✅ **Quality report** | Catches unreadable timing, bad wrapping, lines left untranslated |
+| 🎬 **Finds your movie** | Detects the matching video file automatically |
+| 🖱 **Drag & drop** | Drop an `.srt` straight onto the window |
+
+---
+
+## Install
+
+```bash
+git clone https://github.com/<your-user>/SinhalaSub.git
+cd SinhalaSub
+pip install -r requirements.txt
 python sinhalasub.py
 ```
 
-or double-click **`SinhalaSub.pyw`** to open it without a console window.
+Requires **Windows** and **Python 3.11+**. Double-click **`SinhalaSub.pyw`** to launch without a console window.
 
-1. **Browse** to a local English `.srt` (or use the OpenSubtitles search — see below).
-2. Pick a **model**, **parallel batches**, and an optional **subtitle colour**
-   (written into the .srt as `<font color>` tags, rendered by PotPlayer), then
-   click **Translate to Sinhala**. The status line shows a live countdown of
-   the estimated time remaining, updating every second.
-3. A **preview** of the first 10 translated cues opens (in your chosen colour).
-   Click **Save .si.srt** to write the file, or **Cancel** to discard. If the
-   output already exists you choose: overwrite, save under a new name, or go back.
+> **That's it — no API key, no sign-up.** The default engine is free.
 
-The output is written next to the input as `<basename>.si.srt` — e.g.
-`Movie.2021.srt` → `Movie.2021.si.srt` — in UTF-8 (no BOM), with cue indexes and
-timestamps identical to the input. Put it next to `Movie.2021.mkv` and PotPlayer
-auto-loads it.
+---
 
-## Connecting an LLM (where to put your API key)
+## Engines
 
-Two ways — either works, and neither is ever committed to GitHub:
+Pick one from the **Providers** menu. All settings live in **Providers → Settings…**
 
-**In the app (easiest).** Open the **Providers** menu at the top → pick a
-provider → **Settings…**. Paste your API key (and, for OpenAI-compatible/local,
-the Base URL and model), then click **Test connection** to confirm it works, and
-**Save**. Your choice is remembered.
+| Engine | Speed (2h movie) | Cost | Quality | Needs |
+|---|---|---|---|---|
+| **Google Translate** *(default)* | **~4 min** | free | good | nothing |
+| **Google + Claude polish** | ~6–10 min | a little Claude usage | better on hard lines | Claude Code CLI |
+| **OpenRouter / OpenAI / Local** | ~3–5 min | free tier or cents | best | an API key, or Ollama/LM Studio |
 
-**Or in `.env`.** Copy `.env.example` to `.env` and fill the block for your
-provider. Set `SINHALASUB_PROVIDER` to `cli`, `anthropic`, `gemini`, or `openai`.
+**How the hybrid works:** Google translates everything, then only lines that are **long *and* clause-heavy** go to Claude — capped per batch, worst first. If your Claude allowance runs out it stops asking and quietly finishes on Google, so a run never dies half-done.
 
-| Provider | Key goes in | Default model | Notes |
-|---|---|---|---|
-| **Google Translate (free, fast)** | — (no key) | — | **Fastest option: a full movie in ~4 minutes, free and unlimited, no sign-in.** Machine translation, so the Sinhala is more literal than an LLM's — great for watching, less nuanced on jokes/slang. |
-| Claude Code CLI | — (no key) | your `/model` setting | Best Sinhala quality, but ~35 min per movie and it consumes your Claude usage limit (measured ~1 cue/sec ceiling) |
-| Gemini CLI (Google login) | — (no key) | `gemini-2.5-flash` | Free via your Google account. Install `npm i -g @google/gemini-cli`, run `gemini` once → **Login with Google**. Slower than the Gemini API (spawns per batch) but free and doesn't touch your Claude limit. |
-| Anthropic API | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` | System prompt is prompt-cached for speed |
-| Google Gemini (API) | `GEMINI_API_KEY` | `gemini-2.5-flash` | Fastest Gemini option; free API key from aistudio.google.com/apikey |
-| OpenAI / Local | `OPENAI_API_KEY` (+ `OPENAI_BASE_URL`) | `gpt-4o-mini` | Works with OpenAI, **OpenRouter** (`https://openrouter.ai/api/v1`, free key + free models like `google/gemini-2.0-flash-exp:free`), **Ollama** (`http://localhost:11434/v1`), and **LM Studio** (`http://localhost:1234/v1`). Set your model name. |
+<details>
+<summary><b>Where do I put an API key?</b></summary>
 
-> **Free via OpenRouter:** create a free key at [openrouter.ai/keys](https://openrouter.ai/keys) (no card), pick a `:free` model, and set the base URL above. The free tier allows ~50 requests/day — raise **Cues per batch** to ~60 so a full movie fits in one day.
+**In the app:** **Providers → Settings…** → paste the key → **Test connection** → **Save**. There's a **Get a key ↗** button that opens the right page.
 
-**Speed (measured on a 2-hour movie, ~2000 cues):**
+**Or in `.env`:** copy `.env.example` to `.env` and fill in your provider's block.
 
-| Engine | Time | Cost |
+| Provider | Variable | Base URL |
 |---|---|---|
-| Google Translate | **~4 min** | free, unlimited |
-| HTTP APIs (Gemini / OpenRouter / Anthropic) | ~3–5 min | free tier or cents |
-| Claude Code CLI | ~35 min | your Claude usage limit |
+| OpenRouter | `OPENAI_API_KEY` | `https://openrouter.ai/api/v1` |
+| OpenAI | `OPENAI_API_KEY` | `https://api.openai.com/v1` |
+| Ollama | *(none)* | `http://localhost:11434/v1` |
+| LM Studio | *(none)* | `http://localhost:1234/v1` |
 
-The app also skips cues that need no translation (`[music]`, `♪`, numbers),
-translates repeated lines (`Yeah.`, `Okay.`) only once, and packs each request
-with real work only — so every engine sends far fewer tokens than before.
-For the best mix of speed and quality use a fast model (Claude Haiku, Gemini
-Flash, `gpt-4o-mini`); switch to a larger model (Sonnet/Opus, Gemini Pro) only
-when a film needs extra polish.
+Keys are stored in `secrets.json` (gitignored, owner-only permissions) and are never committed.
 
-## Choosing a model (and saving your usage limit)
+</details>
 
-The **Model** dropdown controls both quality and how fast you burn your
-Claude subscription's usage window:
+---
 
-- **CLI default** — follows your Claude Code `/model` setting. If that is
-  **opus**, you get the best quality but it is by far the heaviest on your
-  usage limit; a full movie can exhaust a session window.
-- **sonnet** (recommended) — high quality, *much* lighter on your limit.
-- **haiku** — fastest and lightest, slightly less polished.
+## The translation memory
 
-Whatever you select IS used — selecting sonnet really runs sonnet. If a
-translation stops with "session limit" from claude, switch to sonnet/haiku
-and press Translate again; it resumes from where it stopped, so you lose
-nothing.
+Every line SinhalaSub translates goes into a local SQLite database — and this is what makes it get better over time.
 
-Your choices are remembered: the model, subtitle colour, parallel-batch
-count, and translation-memory toggle are saved to `settings.json` the moment
-you change them, so you pick once in the app and it sticks on the next
-launch — no code or `.env` editing needed. (A `SINHALASUB_MODEL` in `.env`
-only sets the first-run default; your in-app choice takes over after that.)
+```
+lines        every translation + which engine made it + a quality tier
+corrections  lines you fixed by hand — these outrank every engine, forever
+names        approved Sinhala spellings, so a character never changes name
+history      what you translated, with which engine, how long it took
+```
 
-Note: parallel batches change *speed*, not total usage — the same number of
-cues costs the same whether you run 1 or 6 at a time; more workers just
-finish sooner (and reach the limit sooner). Lower the "Parallel batches"
-number if you want a gentler, slower run.
+**Quality tiers are the important part.** A cheap machine translation can never overwrite a better one, and a high-quality run won't reuse cheap lines. But the reverse *does* happen — a hard line Claude solved once is reused **free** on every later run:
 
-## Quality and speed
+```
+Movie 1  hybrid run → Claude solves a hard line → saved at "llm" quality
+Movie 2  free Google run hits the same line   → taken from the database, costs nothing
+```
 
-- Batches run **in parallel** (default 3 workers). This does not affect
-  quality: each batch's context is the previous *source English* cues, so
-  batches are independent.
-- Each call runs with `--strict-mcp-config` so your Claude Code MCP
-  servers/connectors are not loaded on every batch, and hidden so **no
-  console windows pop up** during translation.
-- The prompt enforces: phonetic transliteration of names keeping every
-  syllable (Marseille → මාර්සෙයි, not මාසේ), living Sinhala idioms over
-  literal phrasing, and profanity kept at full strength, never sanitized.
+Speed and quality both compound. See it under **Tools → Translation memory…**
 
-## Changing colour is free and instant
+---
 
-Once a file is fully translated and saved, the result is cached next to it
-(`<basename>.si.partial.json`). Load the **same** English .srt again, pick a
-different colour, and press Translate: it loads the saved translation
-**instantly with no usage spent** and jumps straight to the preview — just
-Save. To force a brand-new translation instead (e.g. after changing the
-model), tick **"Re-translate fresh (ignore saved)"** before pressing
-Translate.
+## Screenshots
 
-## Translation memory (translations.db)
+<table>
+<tr>
+<td width="50%"><b>Review & Fix</b><br><sub>Fix a line once — remembered forever</sub><br><img src="docs/screenshots/02-review.png"></td>
+<td width="50%"><b>Colour & Style</b><br><sub>Auto-colour names, speakers, sound cues</sub><br><img src="docs/screenshots/03-colour.png"></td>
+</tr>
+<tr>
+<td><b>Batch</b><br><sub>A whole season, unattended</sub><br><img src="docs/screenshots/04-batch.png"></td>
+<td><b>Timing</b><br><sub>Nudge out-of-sync subtitles</sub><br><img src="docs/screenshots/05-timing.png"></td>
+</tr>
+<tr>
+<td><b>Provider settings</b><br><sub>Engine, key, glossary, performance</sub><br><img src="docs/screenshots/07-providers.png"></td>
+<td><b>About</b><br><sub>Created by NLK</sub><br><img src="docs/screenshots/06-about.png"></td>
+</tr>
+</table>
 
-Every line you save is stored in a local SQLite database. On the next
-translation, **short stock phrases** (up to 5 words — "Thank you.", "Okay.",
-"What?") and `[sound cues]` that are already in the database are reused
-instantly at zero cost; claude only translates what's left. Longer sentences
-are always freshly translated, because the same English line can need a
-different Sinhala rendering depending on the scene — accuracy stays first.
-Reused lines are still shown to the model as context so scenes stay coherent.
-Untick "Translation memory" before translating to disable both reuse and
-saving. The database grows with every movie and is yours — it never leaves
-your machine (and is gitignored).
+---
 
-## Interrupted? Resume for free
+## How it translates well
 
-After every finished batch, progress is checkpointed to
-`<basename>.si.partial.json` next to the input. If the run is cancelled, hits
-your usage limit, or the app closes, press **Translate** again on the same
-file and it resumes from where it stopped. The checkpoint is deleted after a
-successful save.
+- **Sentences split across cues are rejoined** before translating. A subtitle that breaks *"I was going to"* / *"tell you the truth"* into two cues makes machine translation guess — and it guesses wrong. Joined, translated, then split back.
+- **Markup is protected.** `<i>italics</i>`, speaker dashes and ♪ music symbols are peeled off first so they're never translated as words.
+- **SHOUTED LINES are normalised** — translators handle all-caps badly.
+- **Nothing pointless is sent.** `[door slams]`, `♪♪` and numbers never leave your machine, and repeated lines ("Yeah.", "Okay.") are translated once and reused.
+- **A glossary and learned names** keep places and characters spelled your way, consistently.
+- **Alignment is never broken.** If a line fails after retries it keeps its original text — cue numbers and timestamps always match the input exactly.
 
-## Configuration (.env)
+---
 
-Copy `.env.example` to `.env` and edit. Real environment variables always
-override `.env`. Keys: `OPENSUBTITLES_API_KEY`, `SINHALASUB_MODEL`,
-`SINHALASUB_WORKERS`, `SINHALASUB_BATCH_SIZE`, `SINHALASUB_TIMEOUT`.
-`.env` is gitignored, so the folder is safe to push to GitHub as-is.
+## Saving for old TVs
 
-## How it translates
+**Preview → Save as (other formats)…**
 
-Cues are sent to `claude -p` in batches of ~30, with the previous 3 cues
-included as read-only context so pronouns, idioms, running jokes, and profanity
-resolve to their intended meaning — fluent spoken Sinhala, not word-for-word.
-Sound/music cues like `[music]` are left untouched. Malformed batches are
-retried twice; any cue that still fails keeps its English text so alignment is
-never corrupted.
+| Format | Use it for |
+|---|---|
+| **`.srt`** | Almost every TV, box and player — **start here** |
+| **`.sub`** | Very old DivX-era players (frame-based; pick your FPS) |
+| **`.vtt`** | Smart TVs and web players |
+| **`.ass`** | Keeps colour and styling |
+| **`.txt`** | Just the dialogue |
 
-## Optional: OpenSubtitles search
+Also choose the **encoding** — some older TVs only detect UTF-8 when a **BOM** is present.
 
-Set `OPENSUBTITLES_API_KEY` (in `.env` or the environment) and a search panel
-appears: type a movie name, search, select a result, and download the English
-`.srt`. Without the key the panel is hidden and the app works fully in
-local-file mode.
+> ⚠️ **An honest limit:** no file format can add a font to your TV. A set that has no Sinhala font will show boxes whatever you export. If that happens, play through a PC, Chromecast, Fire Stick or an Android box instead.
+
+---
+
+## Good to know
+
+- **Privacy** — the free Google engine sends your subtitle text to Google's public translate endpoint. Fast and free, but the text does leave your machine. A local model via Ollama keeps everything offline.
+- **Stability** — that same endpoint is undocumented. If Google ever changes it, switch to OpenRouter or a local model.
+- **Cost** — Google is free. OpenRouter has a free tier. The Claude polish uses your existing Claude Code subscription, not per-token billing.
+
+---
+
+## Development
+
+```bash
+pip install pytest
+python -m pytest -q        # 145 tests, no network needed
+```
+
+| File | What it does |
+|---|---|
+| `sinhalasub.py` | GUI, batching, checkpoints, orchestration |
+| `providers.py` | The engines behind one interface |
+| `memory_db.py` | Translation memory, corrections, names, history |
+| `subtitle_text.py` | Sentence joining, markup handling, glossary |
+| `colorize.py` | Cue classification and auto-colour |
+| `quality.py` | Subtitling checks (17 cps, 42 chars, 2 lines) |
+| `subtitle_export.py` | SRT / SUB / VTT / ASS / TXT writers |
+
+Interrupted runs resume: progress is checkpointed to `<name>.si.partial.json` after every batch.
+
+---
+
+## Support
+
+<div align="center">
+
+**Created by NLK**
+
+If SinhalaSub saved you an afternoon, a small donation is genuinely appreciated 🙏
+
+**PayPal → `1118niranjan@gmail.com`**
+
+<sub>Also in the app under <b>About → Donate</b></sub>
+
+</div>
