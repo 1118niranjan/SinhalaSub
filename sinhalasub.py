@@ -520,6 +520,44 @@ def _norm_title(text):
     return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
 
 
+_TITLE_STOPWORDS = {"the", "a", "an", "of", "and", "part", "ii", "iii", "iv", "vs"}
+
+
+def _title_tokens(text):
+    """Meaningful words of a title, for judging whether two titles are related."""
+    words = re.findall(r"[a-z0-9]+", (text or "").lower())
+    return {w for w in words if len(w) >= 3 and w not in _TITLE_STOPWORDS}
+
+
+def split_year(query):
+    """Pull a trailing 4-digit year out of a film name.
+
+    People naturally type "Mortal Kombat II 2026" into one box, but the API
+    cannot match a title with the year glued on and silently returns unrelated
+    films instead, so the year is separated before searching.
+    """
+    m = re.search(r"^(.*?)[\s(\[]+((?:19|20)\d{2})[\s)\]]*$", (query or "").strip())
+    if m and m.group(1).strip():
+        return m.group(1).strip(), m.group(2)
+    return (query or "").strip(), ""
+
+
+def _is_related(movie, query):
+    """Whether a returned film plausibly answers what was searched for.
+
+    OpenSubtitles answers an unmatched search with a page of unrelated films
+    rather than an empty list, so anything sharing no meaningful word with the
+    query is dropped instead of being shown as if it were a result.
+    """
+    if not movie:
+        return True  # nothing to judge it on; let the user decide
+    qt, mt = _title_tokens(query), _title_tokens(movie)
+    if qt & mt:
+        return True
+    nq, nm = _norm_title(query), _norm_title(movie)
+    return bool(nq) and (nq in nm or nm in nq)
+
+
 def os_search(key, query, year=""):
     """Search subtitles by film name; returns a list of result dicts.
 
@@ -531,24 +569,50 @@ def os_search(key, query, year=""):
     best-synced) subtitle for a film comes before the rest.
     """
     import requests  # lazy: local-file mode must work without requests installed
-    params = {"query": query, "languages": "en"}
-    if str(year).strip():
-        params["year"] = str(year).strip()
-    resp = requests.get(OS_API_BASE + "/subtitles", params=params,
-                        headers=_os_headers(key), timeout=30)
-    resp.raise_for_status()
+
+    # A year typed into the film box has to be separated out, or the API matches
+    # nothing and answers with unrelated films.
+    query, inline_year = split_year(query)
+    year = str(year).strip() or inline_year
+
+    def fetch(with_year):
+        params = {"query": query, "languages": "en"}
+        if with_year:
+            params["year"] = with_year
+        resp = requests.get(OS_API_BASE + "/subtitles", params=params,
+                            headers=_os_headers(key), timeout=30)
+        resp.raise_for_status()
+        return resp.json().get("data", []) or []
+
+    data = fetch(year)
+    kept = [d for d in data
+            if _is_related(((d.get("attributes") or {}).get("feature_details")
+                            or {}).get("movie_name")
+                           or ((d.get("attributes") or {}).get("feature_details")
+                               or {}).get("title"), query)]
+    # A year that matches no film makes the API ignore the title entirely, so if
+    # filtering leaves nothing, try again on the title alone.
+    if year and not kept:
+        data = fetch("")
+        kept = [d for d in data
+                if _is_related(((d.get("attributes") or {}).get("feature_details")
+                                or {}).get("movie_name")
+                               or ((d.get("attributes") or {}).get("feature_details")
+                                   or {}).get("title"), query)]
+    hidden = len(data) - len(kept)
 
     wanted = _norm_title(query)
     results = []
-    for item in resp.json().get("data", []):
+    for item in kept:
         attrs = item.get("attributes") or {}
         files = attrs.get("files") or []
         if not files or files[0].get("file_id") is None:
             continue
         details = attrs.get("feature_details") or {}
         movie = (details.get("movie_name") or details.get("title") or "").strip()
-        # Some entries prefix the name with the year, e.g. "2010 - Inception".
-        movie = re.sub(r"^\s*\d{4}\s*-\s*", "", movie)
+        # Entries arrive prefixed with the year, e.g. "2010 - Inception", and for
+        # films with no year on record just " - Inception".
+        movie = re.sub(r"^\s*(?:(?:19|20)\d{2})?\s*-\s*", "", movie).strip()
         yr = details.get("year") or ""
         release = (attrs.get("release") or files[0].get("file_name") or "").strip()
         downloads = int(attrs.get("download_count") or 0)
@@ -557,7 +621,9 @@ def os_search(key, query, year=""):
         if movie and yr:
             head = "%s (%s)" % (movie, yr)
         label = head
-        if release and release != movie:
+        # Skip the release when it just repeats the title, e.g. "Inception (2010)".
+        if release and _norm_title(release) not in (_norm_title(head),
+                                                    _norm_title(movie)):
             label += "  ·  %s" % release[:52]
         if downloads:
             label += "  ·  %s downloads" % f"{downloads:,}"
@@ -569,6 +635,7 @@ def os_search(key, query, year=""):
             "release": release,
             "downloads": downloads,
             "label": label,
+            "hidden_unrelated": hidden,
         })
 
     def rank(r):
@@ -577,6 +644,13 @@ def os_search(key, query, year=""):
         return (exact, -r["downloads"])
 
     results.sort(key=rank)
+    if not results:
+        # Report it rather than showing a page of films nobody asked for.
+        return [{"file_id": None, "movie": "", "year": "", "release": "",
+                 "downloads": 0, "hidden_unrelated": hidden,
+                 "label": "No subtitles found for \"%s\"%s" %
+                          (query, " (%d unrelated result(s) hidden)" % hidden
+                           if hidden else "")}]
     return results
 
 
@@ -2712,8 +2786,18 @@ class SinhalaSubApp:
         if not sel or not self.os_results:
             messagebox.showinfo("OpenSubtitles", "Search and select a result first.")
             return
-        file_id, label = self.os_results[sel[0]]
-        safe = re.sub(r'[\\/:*?"<>|]+', "_", label)[:80]
+        chosen = self.os_results[sel[0]]
+        file_id = chosen["file_id"]
+        if file_id is None:  # the "no subtitles found" message row
+            messagebox.showinfo(
+                "OpenSubtitles",
+                "That row is a message, not a subtitle.\n\nTry the film's exact "
+                "title without the year, or a shorter version of the name.")
+            return
+        stem = chosen["movie"] or chosen["release"] or str(file_id)
+        if chosen["movie"] and chosen["year"]:
+            stem = "%s.%s" % (chosen["movie"], chosen["year"])
+        safe = re.sub(r'[\\/:*?"<>|]+', "_", stem)[:80]
         dest = filedialog.asksaveasfilename(
             title="Save English .srt as", defaultextension=".srt",
             initialfile=safe + ".srt",
