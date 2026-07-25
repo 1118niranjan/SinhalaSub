@@ -515,21 +515,68 @@ def _os_headers(key):
     return {"Api-Key": key, "User-Agent": "SinhalaSub v1.0", "Accept": "application/json"}
 
 
-def os_search(key, query):
-    """Search English subtitles by movie name; returns [(file_id, label), ...]."""
+def _norm_title(text):
+    """Lowercase, alphanumeric-only form of a title, for comparing loosely."""
+    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
+
+
+def os_search(key, query, year=""):
+    """Search subtitles by film name; returns a list of result dicts.
+
+    OpenSubtitles matches loosely - searching "The Gift" also returns "The
+    Gifted", "The Ultimate Gift" and so on - and its `release` field is a
+    release name that often does not contain the film's title at all. So each
+    result carries the film name and year, the label always shows them, exact
+    title matches are listed first, and the most-downloaded (usually the
+    best-synced) subtitle for a film comes before the rest.
+    """
     import requests  # lazy: local-file mode must work without requests installed
-    resp = requests.get(OS_API_BASE + "/subtitles",
-                        params={"query": query, "languages": "en"},
+    params = {"query": query, "languages": "en"}
+    if str(year).strip():
+        params["year"] = str(year).strip()
+    resp = requests.get(OS_API_BASE + "/subtitles", params=params,
                         headers=_os_headers(key), timeout=30)
     resp.raise_for_status()
+
+    wanted = _norm_title(query)
     results = []
     for item in resp.json().get("data", []):
-        attrs = item.get("attributes", {})
+        attrs = item.get("attributes") or {}
         files = attrs.get("files") or []
         if not files or files[0].get("file_id") is None:
             continue
-        label = attrs.get("release") or files[0].get("file_name") or str(files[0]["file_id"])
-        results.append((files[0]["file_id"], label))
+        details = attrs.get("feature_details") or {}
+        movie = (details.get("movie_name") or details.get("title") or "").strip()
+        # Some entries prefix the name with the year, e.g. "2010 - Inception".
+        movie = re.sub(r"^\s*\d{4}\s*-\s*", "", movie)
+        yr = details.get("year") or ""
+        release = (attrs.get("release") or files[0].get("file_name") or "").strip()
+        downloads = int(attrs.get("download_count") or 0)
+
+        head = movie or release or str(files[0]["file_id"])
+        if movie and yr:
+            head = "%s (%s)" % (movie, yr)
+        label = head
+        if release and release != movie:
+            label += "  ·  %s" % release[:52]
+        if downloads:
+            label += "  ·  %s downloads" % f"{downloads:,}"
+
+        results.append({
+            "file_id": files[0]["file_id"],
+            "movie": movie,
+            "year": str(yr),
+            "release": release,
+            "downloads": downloads,
+            "label": label,
+        })
+
+    def rank(r):
+        norm = _norm_title(r["movie"])
+        exact = 0 if norm and norm == wanted else (1 if wanted in norm else 2)
+        return (exact, -r["downloads"])
+
+    results.sort(key=rank)
     return results
 
 
@@ -2192,17 +2239,31 @@ class SinhalaSubApp:
         self._os_panel = box
         row = ttk.Frame(box)
         row.pack(fill="x")
+        ttk.Label(row, text="Film", style="Dim.TLabel").pack(side="left")
         self.os_query = tk.StringVar()
-        ttk.Entry(row, textvariable=self.os_query).pack(
-            side="left", fill="x", expand=True, padx=(0, 8))
+        entry = ttk.Entry(row, textvariable=self.os_query)
+        entry.pack(side="left", fill="x", expand=True, padx=(6, 8))
+        entry.bind("<Return>", lambda _e: self.os_do_search())
+        # A year makes all the difference: OpenSubtitles matches titles loosely,
+        # so "The Gift" alone also returns "The Gifted" and "The Ultimate Gift".
+        ttk.Label(row, text="Year", style="Dim.TLabel").pack(side="left")
+        self.os_year = tk.StringVar()
+        year_entry = ttk.Entry(row, textvariable=self.os_year, width=6)
+        year_entry.pack(side="left", padx=(6, 8))
+        year_entry.bind("<Return>", lambda _e: self.os_do_search())
         self.os_search_btn = ttk.Button(row, text="Search", command=self.os_do_search)
         self.os_search_btn.pack(side="left")
         self.os_list = tk.Listbox(
-            box, height=5, exportselection=False, bg=FIELD, fg=TEXT,
+            box, height=6, exportselection=False, bg=FIELD, fg=TEXT,
             selectbackground=ACCENT, selectforeground="#ffffff",
             relief="flat", highlightthickness=0, borderwidth=0,
-            font=("Segoe UI", 10))
+            font=("Segoe UI", 9))
         self.os_list.pack(fill="x", pady=(8, 0))
+        ttk.Label(box, style="Dim.TLabel", wraplength=640,
+                  text="Each row shows the film and year it belongs to. Results for "
+                       "the film you typed are listed first, most-downloaded "
+                       "first - those are usually the best synced.").pack(
+            anchor="w", pady=(6, 0))
         self.os_dl_btn = ttk.Button(
             box, text="Download selected as English .srt", command=self.os_do_download)
         self.os_dl_btn.pack(anchor="e", pady=(8, 0))
@@ -2625,7 +2686,9 @@ class SinhalaSubApp:
 
         def work():
             try:
-                self.msgs.put(("os_results", os_search(self.os_key, query)))
+                self.msgs.put(("os_results",
+                               os_search(self.os_key, query,
+                                         self.os_year.get().strip())))
             except Exception as exc:
                 self.msgs.put(("os_error", "Search failed: %s" % exc))
 
@@ -2634,10 +2697,15 @@ class SinhalaSubApp:
     def _os_fill(self, results):
         self.os_results = results
         self.os_list.delete(0, "end")
-        for _, label in results:
-            self.os_list.insert("end", label)
+        for r in results:
+            self.os_list.insert("end", r["label"])
         self._busy(False)
-        self.status_var.set("Found %d result(s)." % len(results))
+        films = len({r["movie"] for r in results if r["movie"]})
+        note = ""
+        if films > 1:
+            note = (" across %d different films - check the name on each row, "
+                    "or add a year to narrow it." % films)
+        self.status_var.set("Found %d subtitle(s)%s" % (len(results), note))
 
     def os_do_download(self):
         sel = self.os_list.curselection()
