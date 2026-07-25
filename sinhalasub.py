@@ -28,7 +28,9 @@ from tkinter import colorchooser, filedialog, messagebox, ttk
 import pysrt
 
 import colorize
+import memory_db
 import providers
+import quality
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -423,15 +425,9 @@ BRACKET_RE = re.compile(r"^\[[^\]]*\]$")
 SINHALA_RE = re.compile(u"[඀-෿]")
 
 
-def _db():
-    con = sqlite3.connect(DB_PATH)
-    con.execute(
-        "CREATE TABLE IF NOT EXISTS memory ("
-        " source TEXT PRIMARY KEY,"
-        " sinhala TEXT NOT NULL,"
-        " model TEXT,"
-        " created TEXT)")
-    return con
+def get_memory():
+    """The translation-memory database (schema is created/migrated on open)."""
+    return memory_db.MemoryDB(DB_PATH)
 
 
 def memory_reusable(source):
@@ -439,42 +435,15 @@ def memory_reusable(source):
     return bool(BRACKET_RE.match(source)) or len(source.split()) <= MEMORY_MAX_WORDS
 
 
-def memory_lookup(sources):
-    """Return {source: sinhala} for every source line found in the database."""
-    sources = list(set(sources))
-    found = {}
-    con = _db()
-    try:
-        for start in range(0, len(sources), 500):
-            chunk = sources[start:start + 500]
-            marks = ",".join("?" * len(chunk))
-            for src, sin in con.execute(
-                    "SELECT source, sinhala FROM memory WHERE source IN (%s)" % marks,
-                    chunk):
-                found[src] = sin
-    finally:
-        con.close()
-    return found
+def memory_prefill(subs, min_tier=None):
+    """Return {position: sinhala} for cues whose text is safely known already.
 
-
-def memory_store(pairs, model=""):
-    """Insert/refresh translated pairs; returns total rows now in the database."""
-    con = _db()
-    try:
-        con.executemany(
-            "INSERT OR REPLACE INTO memory (source, sinhala, model, created) "
-            "VALUES (?, ?, ?, datetime('now'))",
-            [(src, sin, model) for src, sin in pairs.items()])
-        con.commit()
-        return con.execute("SELECT COUNT(*) FROM memory").fetchone()[0]
-    finally:
-        con.close()
-
-
-def memory_prefill(subs):
-    """Return {position: sinhala} for cues whose text is safely known already."""
+    `min_tier` stops a cheap machine translation from being reused when the user
+    has chosen a higher-quality engine for this run - otherwise the memory would
+    quietly drag a careful pass back down to the quality of the fastest one.
+    """
     flat = [flatten(c.text) for c in subs]
-    found = memory_lookup(flat)
+    found = get_memory().lookup(flat, min_tier=min_tier)
     return {i: found[f] for i, f in enumerate(flat)
             if f in found and memory_reusable(f)}
 
@@ -730,6 +699,9 @@ class SinhalaSubApp:
         tools.add_command(label="Sign in to Claude (for polish)…",
                           command=self.claude_sign_in)
         tools.add_separator()
+        tools.add_command(label="Quality report…", command=self.show_quality_report)
+        tools.add_command(label="Translation memory…", command=self.show_memory_stats)
+        tools.add_separator()
         tools.add_command(label="Open output folder",
                           command=self.open_output_folder)
         menubar.add_cascade(label="Tools", menu=tools)
@@ -979,6 +951,76 @@ class SinhalaSubApp:
         except Exception as exc:  # noqa: BLE001 - report rather than crash
             messagebox.showerror("SinhalaSub",
                                  "Could not open a terminal:\n%s" % exc)
+
+    def show_quality_report(self):
+        """List every cue that breaks a subtitling rule, for the loaded file."""
+        subs = self.subs
+        if subs is None:
+            path = (self.input_var.get().strip()
+                    or self.colour_input.get().strip())
+            if not path or not os.path.isfile(path):
+                messagebox.showinfo(
+                    "Quality report",
+                    "Translate a file first, or pick one on the Translate tab.")
+                return
+            try:
+                subs = load_srt(path)
+            except Exception as exc:
+                messagebox.showerror("SinhalaSub", "Could not read that file:\n%s" % exc)
+                return
+        issues = quality.check(subs)
+
+        win = tk.Toplevel(self.root)
+        win.title("Quality report")
+        win.geometry("760x480")
+        win.configure(bg=BG)
+        ttk.Label(win, text=quality.summarise(issues, len(subs)),
+                  style="Dim.TLabel", wraplength=720).pack(
+            anchor="w", padx=14, pady=(12, 6))
+        wrap = ttk.Frame(win)
+        wrap.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+        text = tk.Text(wrap, wrap="word", bg=CARD, fg=TEXT, relief="flat",
+                       highlightthickness=0, padx=12, pady=10,
+                       font=("Consolas", 9))
+        bar = ttk.Scrollbar(wrap, command=text.yview)
+        text.configure(yscrollcommand=bar.set)
+        bar.pack(side="right", fill="y")
+        text.pack(side="left", fill="both", expand=True)
+        text.tag_configure("hdr", foreground=WARN)
+        if not issues:
+            text.insert("end", "Nothing to fix - this file passes every check.\n")
+        for issue in issues:
+            text.insert("end", "cue %-5s %-16s " % (issue.index, issue.kind), "hdr")
+            text.insert("end", "%s\n" % issue.detail)
+        text.configure(state="disabled")
+        win.transient(self.root)
+
+    def show_memory_stats(self):
+        """What the database has learned so far."""
+        try:
+            mem = get_memory()
+            s = mem.stats()
+            runs = mem.history(limit=8)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("SinhalaSub", "Could not read the database:\n%s" % exc)
+            return
+        lines = [
+            "Translated lines remembered:  %d" % s["lines"],
+            "Your manual corrections:      %d" % s["corrections"],
+            "Learned names:                %d" % s["names"],
+            "Files translated:             %d" % s["runs"],
+            "Cues translated in total:     %d" % s["cues_total"],
+        ]
+        if runs:
+            lines.append("")
+            lines.append("Recent runs:")
+            for r in runs:
+                lines.append("  %-28s %-8s %5d cues  %5.0fs"
+                             % (r["file"][:28], r["engine"], r["cues"], r["seconds"]))
+        lines.append("")
+        lines.append("Corrections always beat engine output, and a machine")
+        lines.append("translation is never reused when a better engine is selected.")
+        messagebox.showinfo("Translation memory", "\n".join(lines))
 
     def open_output_folder(self):
         target = (self.current_input or self.input_var.get().strip()
@@ -1756,7 +1798,9 @@ class SinhalaSubApp:
         mem_hits = 0
         if not fresh and self.memory_var.get():
             try:
-                initial = memory_prefill(subs)
+                # Only reuse lines at least as good as this run's engine.
+                initial = memory_prefill(
+                    subs, min_tier=memory_db.engine_tier(self.provider_key))
                 mem_hits = len(initial)
             except sqlite3.Error:
                 initial = {}
@@ -1981,15 +2025,36 @@ class SinhalaSubApp:
         note = ""
         if pairs:
             try:
-                total = memory_store(pairs, self.last_model)
-                note = " · translation memory now holds %d lines" % total
+                mem = get_memory()
+                total = mem.store(pairs, engine=self.provider_key,
+                                  tier=memory_db.engine_tier(self.provider_key))
+                mem.record_run(src, engine=self.provider_key, cues=len(self.subs),
+                               seconds=(time.time() - self.t_start)
+                               if self.t_start else 0)
+                note = " · memory now holds %d lines" % total
             except sqlite3.Error:
                 pass
+
+        # Quality report: catches unreadable timing, over-long lines and any cue
+        # that quietly stayed in English, before the file ever reaches a player.
+        report = ""
+        try:
+            issues = quality.check(self.subs)
+            report = quality.summarise(issues, len(self.subs))
+        except Exception:  # noqa: BLE001 - a report must never block saving
+            issues = []
+
         win.destroy()
         self._busy(False)
         self.progress.configure(value=0)
         self.status_var.set("Saved: %s%s" % (out, note))
-        messagebox.showinfo("SinhalaSub", "Saved:\n%s" % out)
+        self.last_issues = issues
+        msg = "Saved:\n%s" % out
+        if report:
+            msg += "\n\n%s" % report
+            if issues:
+                msg += "\n\n(Tools → Quality report shows each line.)"
+        messagebox.showinfo("SinhalaSub", msg)
 
     def _cancel_preview(self, win):
         win.destroy()

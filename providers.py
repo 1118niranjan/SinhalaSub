@@ -380,7 +380,16 @@ def build_active_provider(settings, secrets=None, cli_path=None):
     settings = settings or {}
     desc = provider_by_key(settings.get("provider", DEFAULT_PROVIDER))
     key = desc["key"]
-    gloss = settings.get("glossary") or {}
+    gloss = dict(settings.get("glossary") or {})
+    # Names learned from earlier movies keep a character's spelling consistent;
+    # anything the user typed explicitly still wins.
+    try:
+        import memory_db
+        import os as _os
+        gloss = memory_db.MemoryDB(
+            _os.path.join(_HERE, "translations.db")).glossary_with_names(gloss)
+    except Exception:  # noqa: BLE001 - the glossary is an enhancement, not a need
+        pass
     if key == "google":
         return GoogleTranslateProvider(glossary=gloss)
     if key == "hybrid":
