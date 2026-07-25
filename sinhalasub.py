@@ -338,21 +338,31 @@ def translate_all(subs, provider, progress=None, log=None, workers=None,
         return texts
     done = 0
     first_error = None
+    failed_batches = 0
     user_cancelled = False
     with ThreadPoolExecutor(max_workers=max(1, workers or MAX_WORKERS)) as ex:
-        futures = [ex.submit(translate_batch, subs, b, provider, log, stop, None)
-                   for b in todo]
+        futures = {ex.submit(translate_batch, subs, b, provider, log, stop, None): b
+                   for b in todo}
         for fut in as_completed(futures):
+            batch = futures[fut]
             try:
                 result = fut.result()
             except TranslationCancelled:
                 user_cancelled = True
                 continue
             except Exception as exc:
+                # One batch failing must not throw away the rest of the movie.
+                # Those cues keep their original text - the quality report lists
+                # them as untranslated - and the run carries on. Only a run where
+                # *nothing* succeeded is treated as fatal, since that means the
+                # engine is misconfigured rather than having a bad moment.
                 if first_error is None:
                     first_error = exc
-                stop.set()  # make the remaining batches bail out quickly
-                continue
+                failed_batches += 1
+                result = {i: subs[i].text for i in batch}
+                if log:
+                    log("batch of %d cues failed, kept original text: %s"
+                        % (len(batch), str(exc)[:120]))
             for i, t in result.items():
                 texts[i] = t
             done += 1
@@ -360,7 +370,7 @@ def translate_all(subs, provider, progress=None, log=None, workers=None,
                 on_batch(dict(result))
             if progress:
                 progress(done, len(todo))
-    if first_error is not None:
+    if first_error is not None and failed_batches >= len(todo):
         raise first_error
     if user_cancelled or stop.is_set():
         raise TranslationCancelled()
@@ -810,7 +820,7 @@ class SinhalaSubApp:
         self._alive = True    # stop the poll/tick loops once the window closes
 
         apply_style(root)
-        root.title("SinhalaSub — by NLK")
+        root.title("SinhalaSub NLK")
         root.minsize(800, 620)
         icon = os.path.join(self.ASSETS, "app.ico")
         if os.path.isfile(icon):
@@ -1354,25 +1364,18 @@ class SinhalaSubApp:
             pady=(12, 0))
 
         ttk.Separator(frm, orient="horizontal").pack(fill="x", pady=14)
-        ttk.Label(frm, text="Support this project", style="Dim.TLabel").pack()
+        ttk.Label(frm, text="Contact", style="Dim.TLabel").pack()
         ttk.Label(frm, text=self.DONATE_EMAIL,
                   font=("Segoe UI Semibold", 11)).pack(pady=(4, 0))
-        row = ttk.Frame(frm)
-        row.pack(pady=(10, 0))
-        ttk.Button(row, text="Donate via PayPal",
-                   style="Accent.TButton",
-                   command=lambda: webbrowser.open(
-                       "https://www.paypal.com/paypalme/")).pack(side="left")
-        ttk.Button(row, text="Copy email",
-                   command=self._copy_donate_email).pack(side="left", padx=8)
-        ttk.Button(frm, text="Close", command=win.destroy).pack(pady=(16, 0))
+        ttk.Button(frm, text="Copy email",
+                   command=self._copy_email).pack(pady=(10, 0))
+        ttk.Button(frm, text="Close", command=win.destroy).pack(pady=(14, 0))
 
-    def _copy_donate_email(self):
+    def _copy_email(self):
         self.root.clipboard_clear()
         self.root.clipboard_append(self.DONATE_EMAIL)
-        messagebox.showinfo("Copied",
-                            "%s copied to the clipboard.\n\nPaste it into PayPal's "
-                            "\"Send to\" box to donate." % self.DONATE_EMAIL)
+        messagebox.showinfo("Copied", "%s copied to the clipboard."
+                            % self.DONATE_EMAIL)
 
     # Where each provider hands out an API key (opened by the "Get a key" button).
     KEY_URLS = {
@@ -1409,63 +1412,94 @@ class SinhalaSubApp:
         base_var = tk.StringVar(value=pconf.get("base_url") or desc0.get("default_base_url") or "")
         model_var = tk.StringVar(value=pconf.get("model") or desc0["default_model"])
 
-        ttk.Label(frm, text="API key", style="Dim.TLabel").grid(row=1, column=0, sticky="w")
-        key_entry = ttk.Entry(frm, textvariable=key_var, show="•", width=30)
-        key_entry.grid(row=1, column=1, sticky="ew", pady=4)
-        get_key_btn = ttk.Button(
-            frm, text="Get a key ↗",
-            command=lambda: webbrowser.open(self.KEY_URLS.get(current_desc()["key"], "")))
-        get_key_btn.grid(row=1, column=2, sticky="w", padx=(6, 0))
+        # One-click setup: picking a service fills in its URL, model and key page.
+        ttk.Label(frm, text="Service", style="Dim.TLabel").grid(row=1, column=0,
+                                                               sticky="w")
+        preset_var = tk.StringVar(value="")
+        preset_box = ttk.Combobox(frm, textvariable=preset_var, state="readonly",
+                                  width=28,
+                                  values=[p["name"] for p in providers.PRESETS])
+        preset_box.grid(row=1, column=1, sticky="ew", pady=4)
 
-        ttk.Label(frm, text="Base URL", style="Dim.TLabel").grid(row=2, column=0, sticky="w")
+        ttk.Label(frm, text="API key", style="Dim.TLabel").grid(row=2, column=0,
+                                                                sticky="w")
+        key_entry = ttk.Entry(frm, textvariable=key_var, show="•", width=30)
+        key_entry.grid(row=2, column=1, sticky="ew", pady=4)
+
+        def open_key_page():
+            preset = providers.preset_by_name(preset_var.get())
+            url = ((preset or {}).get("key_url")
+                   or self.KEY_URLS.get(current_desc()["key"], ""))
+            if url:
+                webbrowser.open(url)
+
+        get_key_btn = ttk.Button(frm, text="Sign in / get key ↗",
+                                 command=open_key_page)
+        get_key_btn.grid(row=2, column=2, sticky="w", padx=(6, 0))
+
+        preset_note = ttk.Label(frm, text="", style="Dim.TLabel", wraplength=430)
+        preset_note.grid(row=3, column=1, columnspan=2, sticky="w")
+
+        def apply_preset(*_):
+            preset = providers.preset_by_name(preset_var.get())
+            if not preset:
+                return
+            base_var.set(preset["base_url"])
+            model_var.set(preset["model"])
+            preset_note.configure(text=preset["note"])
+            # Presets are all OpenAI-compatible endpoints.
+            prov_var.set(providers.provider_by_key("openai")["label"])
+        preset_box.bind("<<ComboboxSelected>>", apply_preset)
+
+        ttk.Label(frm, text="Base URL", style="Dim.TLabel").grid(row=4, column=0, sticky="w")
         base_entry = ttk.Entry(frm, textvariable=base_var, width=36)
-        base_entry.grid(row=2, column=1, columnspan=2, sticky="ew", pady=4)
-        ttk.Label(frm, text="Model", style="Dim.TLabel").grid(row=3, column=0, sticky="w")
+        base_entry.grid(row=4, column=1, columnspan=2, sticky="ew", pady=4)
+        ttk.Label(frm, text="Model", style="Dim.TLabel").grid(row=5, column=0, sticky="w")
         ttk.Entry(frm, textvariable=model_var, width=36).grid(
-            row=3, column=1, columnspan=2, sticky="ew", pady=4)
+            row=5, column=1, columnspan=2, sticky="ew", pady=4)
 
         ttk.Separator(frm, orient="horizontal").grid(
-            row=4, column=0, columnspan=3, sticky="ew", pady=(10, 6))
+            row=6, column=0, columnspan=3, sticky="ew", pady=(10, 6))
         ttk.Label(frm, text="OpenSubtitles key", style="Dim.TLabel").grid(
-            row=5, column=0, sticky="w")
+            row=7, column=0, sticky="w")
         os_key_var = tk.StringVar(value=secrets.get("opensubtitles", ""))
         ttk.Entry(frm, textvariable=os_key_var, show="•", width=30).grid(
-            row=5, column=1, sticky="ew", pady=4)
+            row=7, column=1, sticky="ew", pady=4)
         ttk.Button(frm, text="Get a key ↗",
                    command=lambda: webbrowser.open(self.OS_KEY_URL)).grid(
-            row=5, column=2, sticky="w", padx=(6, 0))
+            row=7, column=2, sticky="w", padx=(6, 0))
         ttk.Label(frm, text="(optional — enables the movie search panel)",
-                  style="Dim.TLabel").grid(row=6, column=1, columnspan=2, sticky="w")
+                  style="Dim.TLabel").grid(row=8, column=1, columnspan=2, sticky="w")
 
         # --- performance knobs, moved off the main window ---
         ttk.Separator(frm, orient="horizontal").grid(
-            row=7, column=0, columnspan=3, sticky="ew", pady=(10, 6))
+            row=9, column=0, columnspan=3, sticky="ew", pady=(10, 6))
         ttk.Label(frm, text="Claude model", style="Dim.TLabel").grid(
-            row=8, column=0, sticky="w")
-        ttk.Combobox(frm, textvariable=self.model_var, values=MODEL_CHOICES,
-                     state="readonly", width=14).grid(row=8, column=1, sticky="w", pady=3)
-        ttk.Label(frm, text="Parallel batches", style="Dim.TLabel").grid(
-            row=9, column=0, sticky="w")
-        ttk.Spinbox(frm, from_=1, to=20, textvariable=self.workers_var, width=5,
-                    state="readonly").grid(row=9, column=1, sticky="w", pady=3)
-        ttk.Label(frm, text="Cues per batch", style="Dim.TLabel").grid(
             row=10, column=0, sticky="w")
+        ttk.Combobox(frm, textvariable=self.model_var, values=MODEL_CHOICES,
+                     state="readonly", width=14).grid(row=10, column=1, sticky="w", pady=3)
+        ttk.Label(frm, text="Parallel batches", style="Dim.TLabel").grid(
+            row=11, column=0, sticky="w")
+        ttk.Spinbox(frm, from_=1, to=20, textvariable=self.workers_var, width=5,
+                    state="readonly").grid(row=11, column=1, sticky="w", pady=3)
+        ttk.Label(frm, text="Cues per batch", style="Dim.TLabel").grid(
+            row=12, column=0, sticky="w")
         ttk.Combobox(frm, textvariable=self.batch_var, state="readonly", width=8,
                      values=["Auto", "30", "50", "100", "150", "250"]).grid(
-            row=10, column=1, sticky="w", pady=3)
+            row=12, column=1, sticky="w", pady=3)
 
         ttk.Label(frm, text="Glossary", style="Dim.TLabel").grid(
-            row=11, column=0, sticky="nw", pady=(6, 0))
+            row=13, column=0, sticky="nw", pady=(6, 0))
         gloss_var = tk.StringVar(value=self._glossary_text())
         gloss = tk.Text(frm, height=3, width=34, bg=FIELD, fg=TEXT, relief="flat",
                         insertbackground=TEXT, font=("Segoe UI", 9))
         gloss.insert("1.0", gloss_var.get())
-        gloss.grid(row=11, column=1, columnspan=2, sticky="ew", pady=(6, 0))
+        gloss.grid(row=13, column=1, columnspan=2, sticky="ew", pady=(6, 0))
         ttk.Label(frm, text="one per line:  Marseille = මාර්සෙයි",
-                  style="Dim.TLabel").grid(row=12, column=1, columnspan=2, sticky="w")
+                  style="Dim.TLabel").grid(row=14, column=1, columnspan=2, sticky="w")
 
         status = ttk.Label(frm, text="", style="Dim.TLabel", wraplength=340)
-        status.grid(row=13, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        status.grid(row=15, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
         def sync_fields(*_):
             d = current_desc()
@@ -1537,7 +1571,7 @@ class SinhalaSubApp:
             win.destroy()
 
         btns = ttk.Frame(frm)
-        btns.grid(row=14, column=0, columnspan=3, sticky="e", pady=(12, 0))
+        btns.grid(row=16, column=0, columnspan=3, sticky="e", pady=(12, 0))
         ttk.Button(btns, text="Test connection", command=do_test).pack(side="left")
         ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=8)
         ttk.Button(btns, text="Save", style="Accent.TButton",

@@ -113,3 +113,23 @@ def test_glossary_is_case_insensitive_and_whole_word():
 
 def test_empty_glossary_is_a_no_op():
     assert st.apply_glossary("Nothing changes", {}) == "Nothing changes"
+
+
+# ----- safer splitting -------------------------------------------------------
+
+def test_never_merges_more_than_two_cues():
+    texts = ["one two", "three four", "five six", "seven eight"]
+    assert all(len(g) <= 2 for g in st.group_sentences(texts))
+
+
+def test_split_prefers_a_comma_boundary():
+    # proportional split would cut mid-phrase; the comma is the natural break
+    parts = st.split_translation("එක දෙක, තුන හතර පහ", [2, 3])
+    assert parts[0].endswith(",")
+    assert parts[1] == "තුන හතර පහ"
+
+
+def test_split_still_works_without_punctuation():
+    parts = st.split_translation("එක දෙක තුන හතර", [2, 2])
+    assert len(parts) == 2
+    assert (parts[0] + " " + parts[1]).split() == "එක දෙක තුන හතර".split()

@@ -266,6 +266,45 @@ SOURCE_LANGUAGES = [
 ]
 
 
+# One-click setups for the OpenAI-compatible provider. Every one of these speaks
+# the same /chat/completions API, so a preset is just a base URL, a sensible
+# model and where to get a key.
+PRESETS = [
+    {"name": "OpenRouter (free models)",
+     "base_url": "https://openrouter.ai/api/v1",
+     "model": "openrouter/free",
+     "key_url": "https://openrouter.ai/keys",
+     "note": "Free tier, no card needed. Many models behind one key."},
+    {"name": "OpenAI",
+     "base_url": "https://api.openai.com/v1",
+     "model": "gpt-4o-mini",
+     "key_url": "https://platform.openai.com/api-keys",
+     "note": "Paid per token. Fast and reliable."},
+    {"name": "Google Gemini",
+     "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+     "model": "gemini-2.5-flash",
+     "key_url": "https://aistudio.google.com/apikey",
+     "note": "Free API key from Google AI Studio."},
+    {"name": "Ollama (local, offline)",
+     "base_url": "http://localhost:11434/v1",
+     "model": "llama3.1",
+     "key_url": "https://ollama.com/download",
+     "note": "Runs on your PC. No key, no internet, fully private."},
+    {"name": "LM Studio (local, offline)",
+     "base_url": "http://localhost:1234/v1",
+     "model": "local-model",
+     "key_url": "https://lmstudio.ai/",
+     "note": "Runs on your PC. Start its local server first."},
+]
+
+
+def preset_by_name(name):
+    for p in PRESETS:
+        if p["name"] == name:
+            return p
+    return None
+
+
 def language_name(code):
     for c, name in SOURCE_LANGUAGES:
         if c == code:
@@ -277,6 +316,31 @@ def _google_translator_cls():
     """Imported lazily so the app runs without deep-translator installed."""
     from deep_translator import GoogleTranslator
     return GoogleTranslator
+
+
+# When the translate endpoint fails it can answer with the body of an HTML error
+# page rather than an error status. Without this check that text is treated as a
+# translation and written straight into the subtitle file.
+_ERROR_SIGNS = (
+    "that's an error", "that’s an error", "all we know",
+    "server error", "bad gateway", "service unavailable",
+    "too many requests", "gateway timeout", "temporarily unavailable",
+    "<html", "<head", "<body", "<!doctype",
+)
+_ERROR_CODES = ("error 400", "error 403", "error 404", "error 429",
+                "error 500", "error 502", "error 503", "error 504",
+                "400 bad", "403 forbidden", "404 not found", "429 ",
+                "500 internal", "502 ", "503 ", "504 ")
+
+
+def looks_like_error_page(text):
+    """True if `text` is an error page or markup rather than a translation."""
+    if not text:
+        return False
+    low = text.strip().lower()
+    if any(sign in low for sign in _ERROR_SIGNS):
+        return True
+    return any(code in low for code in _ERROR_CODES)
 
 
 class GoogleTranslateProvider(Provider):
@@ -356,6 +420,15 @@ class GoogleTranslateProvider(Provider):
         except Exception as exc:  # noqa: BLE001 - surfaced to the retry loop
             raise RuntimeError("Google Translate failed: %s" % str(exc)[:300])
         results = list(results or [])
+
+        # Raise instead of returning an error page as if it were Sinhala: the
+        # batch is then retried, and any cue that still fails keeps its original
+        # text rather than being overwritten with the error message.
+        for got in results:
+            if looks_like_error_page(got):
+                raise RuntimeError(
+                    "Google Translate returned an error page, not a translation: "
+                    "%s" % (got or "").strip()[:120])
 
         # 3. Share each translation back across the cues it came from, then put
         #    the original markup back on.

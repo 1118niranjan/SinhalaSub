@@ -17,7 +17,10 @@ TERMINAL_RE = re.compile(r"[.!?…:](['\"”’)\]]*)$")
 BRACKET_RE = re.compile(r"^\[[^\]]*\]$")
 LETTER_RE = re.compile(r"[^\W\d_]", re.UNICODE)
 
-MAX_GROUP = 3  # never merge more than three cues into one sentence
+# Two cues is the sweet spot. Merging three means the translation has to be cut
+# into three pieces by word count, and Sinhala word order differs enough from
+# English that the middle piece often lands on the wrong cue.
+MAX_GROUP = 2
 
 
 def unwrap(text):
@@ -123,6 +126,16 @@ def split_translation(translated, word_counts):
     words = (translated or "").split()
     if not words:
         return [""] * n
+
+    # Prefer a natural break. If the translation contains a comma near the point
+    # the proportional split would fall, cut there instead - a clause boundary
+    # reads far better on screen than a cut in the middle of a phrase.
+    if n == 2:
+        target = max(1, int(round(len(words) * (word_counts[0] / (sum(word_counts) or 2)))))
+        for offset in (0, 1, -1, 2, -2):
+            k = target + offset
+            if 1 <= k < len(words) and words[k - 1].endswith((",", ";", ":", "…")):
+                return [" ".join(words[:k]), " ".join(words[k:])]
     total = sum(word_counts) or n
     parts, start = [], 0
     for k, wc in enumerate(word_counts):
