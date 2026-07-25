@@ -690,7 +690,7 @@ class SinhalaSubApp:
 
         apply_style(root)
         root.title("SinhalaSub — by NLK")
-        root.minsize(780, 560)
+        root.minsize(800, 620)
         icon = os.path.join(self.ASSETS, "app.ico")
         if os.path.isfile(icon):
             try:
@@ -719,6 +719,7 @@ class SinhalaSubApp:
         tools.add_command(label="Sign in to Claude (for polish)…",
                           command=self.claude_sign_in)
         tools.add_separator()
+        tools.add_command(label="Character & place names…", command=self.open_names)
         tools.add_command(label="Quality report…", command=self.show_quality_report)
         tools.add_command(label="Translation memory…", command=self.show_memory_stats)
         tools.add_separator()
@@ -879,8 +880,10 @@ class SinhalaSubApp:
         return "%s (%s)" % (desc["label"], model)
 
     def _refresh_engine_header(self):
-        self.subtitle_lbl.configure(
-            text="English → සිංහල subtitles · Engine: %s" % self._engine_label())
+        if getattr(self, "_engine_text", None) is not None:
+            self.header.itemconfigure(
+                self._engine_text,
+                text="any language → සිංහල   ·   Engine: %s" % self._engine_label())
         self._update_translate_gate()
 
     def _update_translate_gate(self):
@@ -938,6 +941,7 @@ class SinhalaSubApp:
         win.configure(bg=BG)
         win.transient(self.root)
         win.grab_set()
+        win.after(1, lambda: self._centre(win))
         frm = ttk.Frame(win, padding=16)
         frm.pack(fill="both", expand=True)
         ttk.Label(frm, text="Paste your OpenSubtitles API key to enable movie search.",
@@ -992,6 +996,139 @@ class SinhalaSubApp:
         except Exception as exc:  # noqa: BLE001 - report rather than crash
             messagebox.showerror("SinhalaSub",
                                  "Could not open a terminal:\n%s" % exc)
+
+    def open_names(self):
+        """Approve the Sinhala spelling of each character and place name once.
+
+        Approved names are stored in the database and pushed into the glossary of
+        every future run, so a character is never spelled two different ways -
+        the usual giveaway of a machine-translated subtitle.
+        """
+        path = self.input_var.get().strip()
+        detected = set()
+        if path and os.path.isfile(path):
+            try:
+                detected = colorize.find_names([c.text for c in load_srt(path)])
+            except Exception:  # noqa: BLE001 - saved names still editable
+                detected = set()
+        try:
+            known = get_memory().names()
+        except sqlite3.Error:
+            known = {}
+        terms = sorted(set(detected) | set(known))
+        if not terms:
+            messagebox.showinfo(
+                "Names",
+                "No names found yet.\n\nPick an English .srt on the Translate tab "
+                "first - names are detected from it.")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Character & place names")
+        win.geometry("560x520")
+        win.configure(bg=BG)
+        win.transient(self.root)
+        win.grab_set()
+        win.after(1, lambda: self._centre(win))
+        ttk.Label(win, style="Dim.TLabel", wraplength=520,
+                  text="Set how each name should be written in Sinhala. Approved "
+                       "names are reused in every future movie, so spelling stays "
+                       "consistent. Leave one blank to let the translator decide.").pack(
+            anchor="w", padx=14, pady=(12, 8))
+
+        # Scrollable rows - a movie can easily have 40+ names.
+        area = ttk.Frame(win)
+        area.pack(fill="both", expand=True, padx=14)
+        canvas = tk.Canvas(area, bg=BG, highlightthickness=0, bd=0)
+        bar = ttk.Scrollbar(area, orient="vertical", command=canvas.yview)
+        rows = ttk.Frame(canvas)
+        canvas.configure(yscrollcommand=bar.set)
+        bar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        window_id = canvas.create_window((0, 0), window=rows, anchor="nw")
+        rows.bind("<Configure>",
+                  lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>",
+                    lambda e: canvas.itemconfigure(window_id, width=e.width))
+        canvas.bind_all("<MouseWheel>",
+                        lambda e: canvas.yview_scroll(-int(e.delta / 120), "units"))
+
+        entries = {}
+        for term in terms:
+            row = ttk.Frame(rows)
+            row.pack(fill="x", pady=2)
+            mark = "•" if term in known else " "
+            ttk.Label(row, text="%s %s" % (mark, term), width=24).pack(side="left")
+            var = tk.StringVar(value=known.get(term, ""))
+            ttk.Entry(row, textvariable=var, font=SINHALA_FONT).pack(
+                side="left", fill="x", expand=True)
+            entries[term] = var
+
+        status = tk.StringVar(
+            value="%d name(s) · %d already approved" % (len(terms), len(known)))
+        ttk.Label(win, textvariable=status, style="Dim.TLabel").pack(
+            anchor="w", padx=14, pady=(8, 0))
+
+        def suggest_blank():
+            """Machine-translate only the names with no spelling yet."""
+            blanks = [t for t, v in entries.items() if not v.get().strip()]
+            if not blanks:
+                status.set("Every name already has a spelling.")
+                return
+            status.set("Suggesting %d name(s)…" % len(blanks))
+            win.update_idletasks()
+
+            def work():
+                try:
+                    prov = providers.GoogleTranslateProvider(
+                        source=self.settings.get("source_lang") or "auto")
+                    stdin = "TRANSLATE (%d lines):\n" % len(blanks)
+                    stdin += "".join("%d|||%s\n" % (i + 1, t)
+                                     for i, t in enumerate(blanks))
+                    out = prov.translate("", stdin, 60)
+                    got = {}
+                    for line in out.splitlines():
+                        num, _, body = line.partition("|||")
+                        if num.strip().isdigit():
+                            got[int(num.strip())] = body.strip()
+                except Exception as exc:  # noqa: BLE001 - shown to the user
+                    self.root.after(0, lambda: status.set(
+                        "Could not suggest: %s" % str(exc)[:80]))
+                    return
+
+                def apply():
+                    for i, term in enumerate(blanks):
+                        if got.get(i + 1):
+                            entries[term].set(got[i + 1])
+                    status.set("Suggested %d name(s) - review, then Save." % len(got))
+                self.root.after(0, apply)
+
+            threading.Thread(target=work, daemon=True).start()
+
+        def save_all():
+            saved = 0
+            try:
+                mem = get_memory()
+                for term, var in entries.items():
+                    val = var.get().strip()
+                    if val:
+                        mem.learn_name(term, val)
+                        saved += 1
+            except sqlite3.Error as exc:
+                messagebox.showerror("SinhalaSub", "Could not save:\n%s" % exc,
+                                     parent=win)
+                return
+            win.destroy()
+            self.status_var.set(
+                "%d name(s) approved - they will be used in every future translation."
+                % saved)
+
+        btns = ttk.Frame(win, padding=(14, 12))
+        btns.pack(fill="x")
+        ttk.Button(btns, text="Suggest missing", command=suggest_blank).pack(side="left")
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="right", padx=6)
+        ttk.Button(btns, text="Save names", style="Accent.TButton",
+                   command=save_all).pack(side="right")
 
     def show_quality_report(self):
         """List every cue that breaks a subtitling rule, for the loaded file."""
@@ -1080,6 +1217,7 @@ class SinhalaSubApp:
         win.configure(bg=BG)
         win.transient(self.root)
         win.grab_set()
+        win.after(1, lambda: self._centre(win))
         frm = ttk.Frame(win, padding=20)
         frm.pack(fill="both", expand=True)
 
@@ -1133,6 +1271,7 @@ class SinhalaSubApp:
         win.configure(bg=BG)
         win.transient(self.root)
         win.grab_set()
+        win.after(1, lambda: self._centre(win))
         frm = ttk.Frame(win, padding=16)
         frm.pack(fill="both", expand=True)
 
@@ -1308,43 +1447,75 @@ class SinhalaSubApp:
 
     ASSETS = os.path.join(_HERE, "assets")
 
-    def _load_image(self, name, size):
-        """Load and resize an asset; returns None when Pillow/file is missing."""
+    def _load_image(self, name, size, scrim=0):
+        """Load and resize an asset; returns None when Pillow/file is missing.
+
+        `scrim` darkens the left portion of the image so light text placed there
+        stays readable no matter how bright the artwork is underneath.
+        """
         path = os.path.join(self.ASSETS, name)
         if not os.path.isfile(path):
             return None
         try:
-            from PIL import Image, ImageTk
+            from PIL import Image, ImageDraw, ImageTk
             img = Image.open(path).convert("RGBA").resize(size, Image.LANCZOS)
+            if scrim:
+                w, h = img.size
+                veil = Image.new("L", (w, 1))
+                px = veil.load()
+                for x in range(w):
+                    # Strong on the left, fading out by `scrim` of the width.
+                    t = min(1.0, x / max(1.0, w * scrim))
+                    px[x, 0] = int(215 * (1.0 - t) ** 1.5)
+                mask = veil.resize((w, h))
+                dark = Image.new("RGBA", (w, h), (8, 9, 16, 255))
+                dark.putalpha(mask)
+                img = Image.alpha_composite(img, dark)
             photo = ImageTk.PhotoImage(img)
             self._images.append(photo)   # prevent garbage collection
             return photo
         except Exception:  # noqa: BLE001 - the app must run without Pillow
             return None
 
+    HEADER_H = 68
+
     def _build_header(self, parent):
-        band = tk.Frame(parent, bg=BG, height=64)
-        band.pack(fill="x", pady=(0, 10))
-        band.pack_propagate(False)
+        """Banner, logo and titles drawn on one canvas.
 
-        banner = self._load_image("header_pro.png", (1100, 64))
+        A canvas is used rather than labels because canvas text has no opaque
+        background box - labels would paint a visible rectangle over the artwork.
+        """
+        self.header = tk.Canvas(parent, height=self.HEADER_H, bg=BG,
+                                highlightthickness=0, bd=0)
+        self.header.pack(fill="x", pady=(0, 12))
+
+        banner = self._load_image("header_pro.png", (1600, self.HEADER_H), scrim=0.55)
         if banner:
-            bg_lbl = tk.Label(band, image=banner, bd=0, bg=BG)
-            bg_lbl.place(x=0, y=0, relwidth=1, relheight=1)
+            self.header.create_image(0, 0, image=banner, anchor="nw")
 
-        logo = self._load_image("logo.png", (46, 46))
+        logo = self._load_image("logo.png", (52, 52))
+        text_x = 8
         if logo:
-            tk.Label(band, image=logo, bd=0, bg=CARD).place(x=2, y=9)
-        text_x = 58 if logo else 4
+            self.header.create_image(6, self.HEADER_H // 2, image=logo, anchor="w")
+            text_x = 68
 
-        tk.Label(band, text="SinhalaSub", bg=CARD if not banner else "#151726",
-                 fg=TEXT, font=("Segoe UI Semibold", 19),
-                 bd=0).place(x=text_x, y=6)
-        self.subtitle_lbl = tk.Label(
-            band, text="English → සිංහල  ·  Engine: %s" % self._engine_label(),
-            bg=CARD if not banner else "#151726", fg=DIM,
-            font=("Segoe UI", 9), bd=0)
-        self.subtitle_lbl.place(x=text_x + 2, y=38)
+        self.header.create_text(text_x, 20, text="SinhalaSub", anchor="w",
+                                fill=TEXT, font=("Segoe UI Semibold", 20))
+        self._engine_text = self.header.create_text(
+            text_x + 2, 46, anchor="w", fill=DIM, font=("Segoe UI", 9),
+            text="any language → සිංහල   ·   Engine: %s" % self._engine_label())
+        # Kept for compatibility with code that updates the engine line.
+        self.subtitle_lbl = None
+
+    def _centre(self, win):
+        """Place a dialog over the middle of the main window, fully on screen."""
+        win.update_idletasks()
+        w, h = win.winfo_width(), win.winfo_height()
+        px, py = self.root.winfo_rootx(), self.root.winfo_rooty()
+        pw, ph = self.root.winfo_width(), self.root.winfo_height()
+        x = max(0, min(px + (pw - w) // 2, win.winfo_screenwidth() - w))
+        y = max(0, min(py + (ph - h) // 3, win.winfo_screenheight() - h))
+        win.geometry("+%d+%d" % (x, y))
 
     def _make_drop_target(self, widget, handler):
         """Register a widget so dropped .srt files load into the right field."""
@@ -1864,8 +2035,13 @@ class SinhalaSubApp:
                         variable=self.colour_mode,
                         command=self._sync_colour_mode).pack(side="left", padx=16)
 
+        # Mode-specific controls live in this slot so they always sit between the
+        # mode radios and the action buttons, whichever mode is showing.
+        self.colour_body = ttk.Frame(parent)
+        self.colour_body.pack(fill="x")
+
         # --- single colour ---
-        self.single_box = ttk.Frame(parent)
+        self.single_box = ttk.Frame(self.colour_body)
         self.single_box.pack(fill="x", pady=(10, 0))
         ttk.Label(self.single_box, text="Colour", style="Dim.TLabel").pack(side="left")
         box = ttk.Combobox(self.single_box, textvariable=self.color_name,
@@ -1878,7 +2054,7 @@ class SinhalaSubApp:
         self.swatch.pack(side="left")
 
         # --- auto colour ---
-        self.auto_box = ttk.LabelFrame(parent, text=" What to colour ", padding=10)
+        self.auto_box = ttk.LabelFrame(self.colour_body, text=" What to colour ", padding=10)
         self.auto_vars, self.auto_hex, self.auto_swatches = {}, {}, {}
         for key, label, default_hex in self.AUTO_ROWS:
             conf = saved.get(key) or {}
@@ -2276,6 +2452,7 @@ class SinhalaSubApp:
 
         win.transient(self.root)
         win.grab_set()
+        win.after(1, lambda: self._centre(win))
         win.protocol("WM_DELETE_WINDOW", lambda: self._cancel_preview(win))
 
     def _save(self, win):
@@ -2359,6 +2536,7 @@ class SinhalaSubApp:
         win.configure(bg=BG)
         win.transient(self.root)
         win.grab_set()
+        win.after(1, lambda: self._centre(win))
         frm = ttk.Frame(win, padding=16)
         frm.pack(fill="both", expand=True)
 
