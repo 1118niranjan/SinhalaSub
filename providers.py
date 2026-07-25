@@ -238,6 +238,41 @@ class HybridProvider(Provider):
                          for n, src in targets) + "\n"
 
 
+# Source languages worth offering explicitly. "auto" lets Google detect, which
+# is the right default - subtitle files rarely say what language they are in.
+SOURCE_LANGUAGES = [
+    ("auto", "Detect automatically"),
+    ("en", "English"),
+    ("hi", "Hindi"),
+    ("ta", "Tamil"),
+    ("te", "Telugu"),
+    ("ml", "Malayalam"),
+    ("kn", "Kannada"),
+    ("bn", "Bengali"),
+    ("ur", "Urdu"),
+    ("ko", "Korean"),
+    ("ja", "Japanese"),
+    ("zh-CN", "Chinese"),
+    ("th", "Thai"),
+    ("id", "Indonesian"),
+    ("es", "Spanish"),
+    ("fr", "French"),
+    ("de", "German"),
+    ("ru", "Russian"),
+    ("ar", "Arabic"),
+    ("tr", "Turkish"),
+    ("pt", "Portuguese"),
+    ("it", "Italian"),
+]
+
+
+def language_name(code):
+    for c, name in SOURCE_LANGUAGES:
+        if c == code:
+            return name
+    return code
+
+
 def _google_translator_cls():
     """Imported lazily so the app runs without deep-translator installed."""
     from deep_translator import GoogleTranslator
@@ -253,10 +288,10 @@ class GoogleTranslateProvider(Provider):
     lines exist for LLM scene understanding and would just waste requests here.
     """
 
-    def __init__(self, model=None, source="en", target="si", glossary=None):
+    def __init__(self, model=None, source="auto", target="si", glossary=None):
         self.model = model or "google-translate"
-        self.source = source
-        self.target = target
+        self.source = source or "auto"
+        self.target = target or "si"
         self.glossary = glossary or {}
 
     def available(self):
@@ -408,11 +443,12 @@ def build_active_provider(settings, secrets=None, cli_path=None):
             _os.path.join(_HERE, "translations.db")).glossary_with_names(gloss)
     except Exception:  # noqa: BLE001 - the glossary is an enhancement, not a need
         pass
+    source = settings.get("source_lang") or "auto"
     if key == "google":
-        return GoogleTranslateProvider(glossary=gloss)
+        return GoogleTranslateProvider(glossary=gloss, source=source)
     if key == "hybrid":
         return HybridProvider(
-            GoogleTranslateProvider(glossary=gloss),
+            GoogleTranslateProvider(glossary=gloss, source=source),
             CliProvider(model=settings.get("model") or "CLI default",
                         cli_path=cli_path),
             min_words=int(settings.get("polish_min_words") or 14))

@@ -31,6 +31,7 @@ import colorize
 import memory_db
 import providers
 import quality
+import subtitle_export
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -688,8 +689,14 @@ class SinhalaSubApp:
         self._alive = True    # stop the poll/tick loops once the window closes
 
         apply_style(root)
-        root.title("SinhalaSub")
-        root.minsize(720, 340)
+        root.title("SinhalaSub — by NLK")
+        root.minsize(780, 560)
+        icon = os.path.join(self.ASSETS, "app.ico")
+        if os.path.isfile(icon):
+            try:
+                root.iconbitmap(icon)
+            except tk.TclError:
+                pass  # some window managers reject .ico; harmless
 
         self.provider_key = self.settings.get("provider", "cli")
 
@@ -764,6 +771,19 @@ class SinhalaSubApp:
         self.video_var = tk.StringVar(value="")
         ttk.Label(main, textvariable=self.video_var, style="OK.TLabel").pack(
             anchor="w", pady=(4, 0))
+
+        lang_row = ttk.Frame(main)
+        lang_row.pack(fill="x", pady=(10, 0))
+        ttk.Label(lang_row, text="Translate from", style="Dim.TLabel").pack(side="left")
+        saved_lang = self.settings.get("source_lang", "auto")
+        self._lang_labels = {name: code
+                             for code, name in providers.SOURCE_LANGUAGES}
+        self.lang_var = tk.StringVar(value=providers.language_name(saved_lang))
+        ttk.Combobox(lang_row, textvariable=self.lang_var, state="readonly", width=22,
+                     values=[n for _c, n in providers.SOURCE_LANGUAGES]).pack(
+            side="left", padx=(6, 6))
+        ttk.Label(lang_row, text="→  සිංහල", style="Dim.TLabel").pack(side="left")
+        self.lang_var.trace_add("write", self._on_lang_change)
 
         if self.os_key:
             self._build_opensubtitles(main)
@@ -880,6 +900,11 @@ class SinhalaSubApp:
                 self.status_var.set(
                     "%s needs an API key. Open Providers → Settings… to add it."
                     % desc["label"])
+
+    def _on_lang_change(self, *_):
+        code = self._lang_labels.get(self.lang_var.get(), "auto")
+        self.settings["source_lang"] = code
+        self._persist()
 
     def _select_provider(self, key):
         self.provider_key = key
@@ -1047,15 +1072,48 @@ class SinhalaSubApp:
         except Exception:  # noqa: BLE001
             messagebox.showinfo("SinhalaSub", folder)
 
+    DONATE_EMAIL = "1118niranjan@gmail.com"
+
     def show_about(self):
-        messagebox.showinfo(
-            "About SinhalaSub",
-            "SinhalaSub\n\n"
-            "Translate English movie subtitles into natural, meaning-based "
-            "spoken Sinhala using the LLM backbone of your choice — Claude "
-            "Code CLI, Anthropic API, Google Gemini, or any OpenAI-compatible / "
-            "local model.\n\n"
-            "Created by NLK")
+        win = tk.Toplevel(self.root)
+        win.title("About SinhalaSub")
+        win.configure(bg=BG)
+        win.transient(self.root)
+        win.grab_set()
+        frm = ttk.Frame(win, padding=20)
+        frm.pack(fill="both", expand=True)
+
+        logo = self._load_image("logo.png", (72, 72))
+        if logo:
+            tk.Label(frm, image=logo, bd=0, bg=BG).pack()
+        ttk.Label(frm, text="SinhalaSub", style="Title.TLabel").pack(pady=(8, 0))
+        ttk.Label(frm, text="Created by NLK", style="Dim.TLabel").pack()
+        ttk.Label(frm, style="Dim.TLabel", wraplength=420, justify="center",
+                  text="Translate movie subtitles from any language into natural, "
+                       "meaning-based spoken Sinhala. Free and fast with Google "
+                       "Translate, or add an LLM for the hardest lines.").pack(
+            pady=(12, 0))
+
+        ttk.Separator(frm, orient="horizontal").pack(fill="x", pady=14)
+        ttk.Label(frm, text="Support this project", style="Dim.TLabel").pack()
+        ttk.Label(frm, text=self.DONATE_EMAIL,
+                  font=("Segoe UI Semibold", 11)).pack(pady=(4, 0))
+        row = ttk.Frame(frm)
+        row.pack(pady=(10, 0))
+        ttk.Button(row, text="Donate via PayPal",
+                   style="Accent.TButton",
+                   command=lambda: webbrowser.open(
+                       "https://www.paypal.com/paypalme/")).pack(side="left")
+        ttk.Button(row, text="Copy email",
+                   command=self._copy_donate_email).pack(side="left", padx=8)
+        ttk.Button(frm, text="Close", command=win.destroy).pack(pady=(16, 0))
+
+    def _copy_donate_email(self):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self.DONATE_EMAIL)
+        messagebox.showinfo("Copied",
+                            "%s copied to the clipboard.\n\nPaste it into PayPal's "
+                            "\"Send to\" box to donate." % self.DONATE_EMAIL)
 
     # Where each provider hands out an API key (opened by the "Get a key" button).
     KEY_URLS = {
@@ -1269,7 +1327,7 @@ class SinhalaSubApp:
         band.pack(fill="x", pady=(0, 10))
         band.pack_propagate(False)
 
-        banner = self._load_image("header.png", (1100, 64))
+        banner = self._load_image("header_pro.png", (1100, 64))
         if banner:
             bg_lbl = tk.Label(band, image=banner, bd=0, bg=BG)
             bg_lbl.place(x=0, y=0, relwidth=1, relheight=1)
@@ -2194,6 +2252,8 @@ class SinhalaSubApp:
         btns.pack(side="bottom", fill="x")
         ttk.Button(btns, text="Save .si.srt", style="Accent.TButton",
                    command=lambda: self._save(win)).pack(side="right")
+        ttk.Button(btns, text="Save as (other formats)…",
+                   command=self.export_as).pack(side="right", padx=8)
         ttk.Button(btns, text="Cancel (do not save)",
                    command=lambda: self._cancel_preview(win)).pack(side="right", padx=8)
 
@@ -2284,6 +2344,89 @@ class SinhalaSubApp:
             if issues:
                 msg += "\n\n(Tools → Quality report shows each line.)"
         messagebox.showinfo("SinhalaSub", msg)
+
+    def export_as(self, subs=None, base_path=None, colour=None):
+        """Ask for a format and encoding, then write the file for that player."""
+        subs = subs if subs is not None else self.subs
+        if subs is None:
+            messagebox.showinfo("SinhalaSub", "Translate or load a subtitle first.")
+            return
+        base_path = base_path or self.current_input or self.input_var.get().strip()
+        colour = self.color_hex if colour is None else colour
+
+        win = tk.Toplevel(self.root)
+        win.title("Save subtitle as…")
+        win.configure(bg=BG)
+        win.transient(self.root)
+        win.grab_set()
+        frm = ttk.Frame(win, padding=16)
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(frm, text="Format", style="Dim.TLabel").grid(row=0, column=0,
+                                                               sticky="w")
+        fmt_labels = [f["label"] for f in subtitle_export.FORMATS]
+        fmt_var = tk.StringVar(value=fmt_labels[0])
+        ttk.Combobox(frm, textvariable=fmt_var, values=fmt_labels, state="readonly",
+                     width=46).grid(row=0, column=1, sticky="ew", pady=4)
+
+        ttk.Label(frm, text="Encoding", style="Dim.TLabel").grid(row=1, column=0,
+                                                                 sticky="w")
+        enc_labels = [e["label"] for e in subtitle_export.ENCODINGS]
+        enc_var = tk.StringVar(value=enc_labels[0])
+        ttk.Combobox(frm, textvariable=enc_var, values=enc_labels, state="readonly",
+                     width=46).grid(row=1, column=1, sticky="ew", pady=4)
+
+        ttk.Label(frm, text="Frame rate", style="Dim.TLabel").grid(row=2, column=0,
+                                                                   sticky="w")
+        fps_var = tk.StringVar(value=str(subtitle_export.DEFAULT_FPS))
+        ttk.Combobox(frm, textvariable=fps_var, state="readonly", width=12,
+                     values=["23.976", "24", "25", "29.97", "30"]).grid(
+            row=2, column=1, sticky="w", pady=4)
+        ttk.Label(frm, text="(only used by MicroDVD .sub)",
+                  style="Dim.TLabel").grid(row=3, column=1, sticky="w")
+
+        ttk.Label(frm, style="Dim.TLabel", wraplength=430,
+                  text="For most TVs and players choose SubRip (.srt). If a very old "
+                       "player shows nothing, try MicroDVD (.sub), and if it still "
+                       "shows nothing try UTF-8 with BOM. Note that a TV can only "
+                       "display Sinhala if it has a Sinhala font built in.").grid(
+            row=4, column=0, columnspan=2, sticky="w", pady=(10, 0))
+
+        def do_save():
+            fmt = subtitle_export.FORMATS[fmt_labels.index(fmt_var.get())]
+            enc = subtitle_export.ENCODINGS[enc_labels.index(enc_var.get())]["key"]
+            try:
+                fps = float(fps_var.get())
+            except ValueError:
+                fps = subtitle_export.DEFAULT_FPS
+            base = base_path or os.path.join(_HERE, "subtitle")
+            if base.lower().endswith(".srt"):
+                base = base[:-4]
+            suggested = os.path.basename(base) + ".si" + fmt["ext"]
+            dest = filedialog.asksaveasfilename(
+                title="Save subtitle as", defaultextension=fmt["ext"],
+                initialdir=os.path.dirname(os.path.abspath(base)),
+                initialfile=suggested,
+                filetypes=[(fmt["label"], "*" + fmt["ext"]), ("All files", "*.*")])
+            if not dest:
+                return
+            try:
+                subtitle_export.write(subs, dest, fmt["key"], encoding=enc,
+                                      fps=fps, colour=colour)
+            except Exception as exc:  # noqa: BLE001 - report, never crash
+                messagebox.showerror("SinhalaSub",
+                                     "Could not write the file:\n%s" % exc, parent=win)
+                return
+            win.destroy()
+            self.status_var.set("Saved: %s" % dest)
+            messagebox.showinfo("SinhalaSub", "Saved:\n%s" % dest)
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=5, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=6)
+        ttk.Button(btns, text="Save", style="Accent.TButton",
+                   command=do_save).pack(side="left")
+        frm.columnconfigure(1, weight=1)
 
     def _cancel_preview(self, win):
         win.destroy()
