@@ -578,14 +578,17 @@ def os_download(key, file_id, dest_path):
 PREVIEW_COUNT = 10
 SINHALA_FONT = ("Nirmala UI", 11)
 
-BG = "#131420"
-CARD = "#1c1e2e"
-FIELD = "#262940"
-BORDER = "#2e3150"
-TEXT = "#e9e9f4"
-DIM = "#9a9db8"
+BG = "#0f1018"          # window background
+CARD = "#171926"        # raised panels
+FIELD = "#1f2233"       # inputs
+FIELD_HI = "#272b40"    # hovered inputs
+BORDER = "#2b2f47"
+TEXT = "#ececf6"
+DIM = "#9296b4"
 ACCENT = "#7c6cff"
 ACCENT_HOVER = "#9186ff"
+OK = "#4ade80"
+WARN = "#fbbf24"
 
 
 def apply_style(root):
@@ -634,6 +637,31 @@ def apply_style(root):
                     lightcolor=BG, darkcolor=BG)
     style.configure("TLabelframe.Label", background=BG, foreground=DIM)
 
+    # Tabs: clam renders these almost invisibly by default, so set every state
+    # explicitly - the selected tab reads as a lit card, the rest sit back.
+    style.configure("TNotebook", background=BG, bordercolor=BORDER,
+                    lightcolor=BG, darkcolor=BG, tabmargins=(0, 6, 0, 0))
+    style.configure("TNotebook.Tab", background=CARD, foreground=DIM,
+                    bordercolor=BORDER, lightcolor=CARD, darkcolor=CARD,
+                    padding=(20, 10), font=("Segoe UI Semibold", 10))
+    style.map("TNotebook.Tab",
+              background=[("selected", ACCENT), ("active", FIELD_HI)],
+              foreground=[("selected", "#ffffff"), ("active", TEXT)],
+              lightcolor=[("selected", ACCENT)],
+              darkcolor=[("selected", ACCENT)],
+              expand=[("selected", (0, 0, 0, 0))])
+
+    style.configure("Card.TFrame", background=CARD)
+    style.configure("Card.TLabel", background=CARD, foreground=TEXT)
+    style.configure("CardDim.TLabel", background=CARD, foreground=DIM)
+    style.configure("Title.TLabel", font=("Segoe UI Semibold", 20), foreground=TEXT)
+    style.configure("OK.TLabel", foreground=OK, background=BG)
+    style.configure("Warn.TLabel", foreground=WARN, background=BG)
+    style.configure("Small.TButton", padding=(9, 4))
+    style.configure("Vertical.TScrollbar", background=FIELD, troughcolor=BG,
+                    bordercolor=BG, arrowcolor=DIM, lightcolor=FIELD,
+                    darkcolor=FIELD)
+
 
 def _fmt_time(seconds):
     m, s = divmod(int(max(0, seconds)), 60)
@@ -653,8 +681,10 @@ COLOR_PRESETS = [
 
 
 class SinhalaSubApp:
-    def __init__(self, root):
+    def __init__(self, root, dnd_available=False):
         self.root = root
+        self.dnd = dnd_available
+        self._images = []  # keep PhotoImage refs alive
         self.claude_path = find_claude()
         self.os_key = providers.load_secrets().get("opensubtitles", "") or opensubtitles_key()
         self.subs = None
@@ -693,19 +723,24 @@ class SinhalaSubApp:
         self.providers_menu.add_command(label="Settings…",
                                         command=self.open_provider_settings)
         menubar.add_cascade(label="Providers", menu=self.providers_menu)
+
+        tools = tk.Menu(menubar, tearoff=0)
+        tools.add_command(label="OpenSubtitles API key…",
+                          command=self.open_opensubtitles_key)
+        tools.add_command(label="Sign in to Claude (for polish)…",
+                          command=self.claude_sign_in)
+        tools.add_separator()
+        tools.add_command(label="Open output folder",
+                          command=self.open_output_folder)
+        menubar.add_cascade(label="Tools", menu=tools)
         menubar.add_command(label="About", command=self.show_about)
         root.config(menu=menubar)
 
-        outer = ttk.Frame(root, padding=16)
+        outer = ttk.Frame(root, padding=(16, 12, 16, 14))
         outer.pack(fill="both", expand=True)
         self._os_panel = None
 
-        ttk.Label(outer, text="SinhalaSub", style="Header.TLabel").pack(anchor="w")
-        self.subtitle_lbl = ttk.Label(
-            outer,
-            text="English → සිංහල subtitles · Engine: %s" % self._engine_label(),
-            style="Dim.TLabel")
-        self.subtitle_lbl.pack(anchor="w", pady=(0, 10))
+        self._build_header(outer)
 
         # Engine knobs live in Providers -> Settings so this window stays clean.
         saved_model = self.settings.get("model")
@@ -717,19 +752,31 @@ class SinhalaSubApp:
 
         nb = ttk.Notebook(outer)
         nb.pack(fill="both", expand=True)
-        main = ttk.Frame(nb, padding=14)
-        colour_tab = ttk.Frame(nb, padding=14)
-        nb.add(main, text="  Translate  ")
-        nb.add(colour_tab, text="  Colour & Style  ")
+        main = ttk.Frame(nb, padding=16)
+        colour_tab = ttk.Frame(nb, padding=16)
+        batch_tab = ttk.Frame(nb, padding=16)
+        timing_tab = ttk.Frame(nb, padding=16)
+        nb.add(main, text="Translate")
+        nb.add(colour_tab, text="Colour & Style")
+        nb.add(batch_tab, text="Batch")
+        nb.add(timing_tab, text="Timing")
         self.main = main
 
+        hint = ("Drop a .srt file anywhere on this tab, or browse for one."
+                if self.dnd else "Choose an English .srt file.")
+        ttk.Label(main, text=hint, style="Dim.TLabel").pack(anchor="w")
+
         file_row = ttk.Frame(main)
-        file_row.pack(fill="x")
+        file_row.pack(fill="x", pady=(6, 0))
         ttk.Label(file_row, text="English .srt:").pack(side="left")
         self.input_var = tk.StringVar()
         ttk.Entry(file_row, textvariable=self.input_var).pack(
             side="left", fill="x", expand=True, padx=8)
         ttk.Button(file_row, text="Browse...", command=self.browse).pack(side="left")
+
+        self.video_var = tk.StringVar(value="")
+        ttk.Label(main, textvariable=self.video_var, style="OK.TLabel").pack(
+            anchor="w", pady=(4, 0))
 
         if self.os_key:
             self._build_opensubtitles(main)
@@ -765,6 +812,11 @@ class SinhalaSubApp:
                   wraplength=660).pack(anchor="w", pady=(8, 0))
 
         self._build_colour_tab(colour_tab)
+        self._build_batch_tab(batch_tab)
+        self._build_timing_tab(timing_tab)
+        # Dropping a file anywhere on either file field loads it.
+        self._make_drop_target(main, self._drop_translate)
+        self._make_drop_target(colour_tab, self._drop_colour)
 
         self._update_translate_gate()
 
@@ -865,6 +917,77 @@ class SinhalaSubApp:
             if term and val:
                 gloss[term] = val
         self.settings["glossary"] = gloss
+
+    def open_opensubtitles_key(self):
+        """Standalone dialog for the OpenSubtitles key (also in provider settings)."""
+        win = tk.Toplevel(self.root)
+        win.title("OpenSubtitles API key")
+        win.configure(bg=BG)
+        win.transient(self.root)
+        win.grab_set()
+        frm = ttk.Frame(win, padding=16)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text="Paste your OpenSubtitles API key to enable movie search.",
+                  style="Dim.TLabel", wraplength=380).pack(anchor="w")
+        var = tk.StringVar(value=providers.load_secrets().get("opensubtitles", ""))
+        entry = ttk.Entry(frm, textvariable=var, show="•", width=44)
+        entry.pack(fill="x", pady=(10, 6))
+        ttk.Button(frm, text="Get a key ↗",
+                   command=lambda: webbrowser.open(self.OS_KEY_URL)).pack(anchor="w")
+
+        def save():
+            sec = providers.load_secrets()
+            val = var.get().strip()
+            if val:
+                sec["opensubtitles"] = val
+            else:
+                sec.pop("opensubtitles", None)
+            providers.save_secrets(sec)
+            self.os_key = val or opensubtitles_key()
+            if self.os_key and self._os_panel is None:
+                self._build_opensubtitles(self.main)
+            win.destroy()
+
+        btns = ttk.Frame(frm)
+        btns.pack(anchor="e", pady=(14, 0))
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=6)
+        ttk.Button(btns, text="Save", style="Accent.TButton",
+                   command=save).pack(side="left")
+
+    def claude_sign_in(self):
+        """Open a terminal running the Claude CLI so the user can log in there.
+
+        Signing in is an interactive browser flow owned by the CLI, so the honest
+        thing is to launch it rather than pretend the app can do it silently.
+        """
+        if not self.claude_path:
+            if messagebox.askyesno(
+                    "Claude CLI not found",
+                    "The Claude CLI is not installed, so the polish pass cannot "
+                    "run.\n\nOpen the install instructions in your browser?"):
+                webbrowser.open("https://claude.com/product/claude-code")
+            return
+        messagebox.showinfo(
+            "Sign in to Claude",
+            "A terminal window will open running the Claude CLI.\n\n"
+            "1. Choose your sign-in method and complete it in the browser\n"
+            "2. Type  /quit  when you are signed in\n"
+            "3. Come back here - the polish pass will start working")
+        try:
+            subprocess.Popen(["cmd", "/k", self.claude_path],
+                             creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+        except Exception as exc:  # noqa: BLE001 - report rather than crash
+            messagebox.showerror("SinhalaSub",
+                                 "Could not open a terminal:\n%s" % exc)
+
+    def open_output_folder(self):
+        target = (self.current_input or self.input_var.get().strip()
+                  or self.colour_input.get().strip())
+        folder = os.path.dirname(os.path.abspath(target)) if target else _HERE
+        try:
+            os.startfile(folder)  # noqa: S606 - Windows shell open
+        except Exception:  # noqa: BLE001
+            messagebox.showinfo("SinhalaSub", folder)
 
     def show_about(self):
         messagebox.showinfo(
@@ -1064,6 +1187,321 @@ class SinhalaSubApp:
             self.color_hex = hex_val
         self.swatch.configure(bg=self.color_hex or FIELD)
         self._persist()
+
+    # ----- header + drag and drop ------------------------------------------
+
+    ASSETS = os.path.join(_HERE, "assets")
+
+    def _load_image(self, name, size):
+        """Load and resize an asset; returns None when Pillow/file is missing."""
+        path = os.path.join(self.ASSETS, name)
+        if not os.path.isfile(path):
+            return None
+        try:
+            from PIL import Image, ImageTk
+            img = Image.open(path).convert("RGBA").resize(size, Image.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            self._images.append(photo)   # prevent garbage collection
+            return photo
+        except Exception:  # noqa: BLE001 - the app must run without Pillow
+            return None
+
+    def _build_header(self, parent):
+        band = tk.Frame(parent, bg=BG, height=64)
+        band.pack(fill="x", pady=(0, 10))
+        band.pack_propagate(False)
+
+        banner = self._load_image("header.png", (1100, 64))
+        if banner:
+            bg_lbl = tk.Label(band, image=banner, bd=0, bg=BG)
+            bg_lbl.place(x=0, y=0, relwidth=1, relheight=1)
+
+        logo = self._load_image("logo.png", (46, 46))
+        if logo:
+            tk.Label(band, image=logo, bd=0, bg=CARD).place(x=2, y=9)
+        text_x = 58 if logo else 4
+
+        tk.Label(band, text="SinhalaSub", bg=CARD if not banner else "#151726",
+                 fg=TEXT, font=("Segoe UI Semibold", 19),
+                 bd=0).place(x=text_x, y=6)
+        self.subtitle_lbl = tk.Label(
+            band, text="English → සිංහල  ·  Engine: %s" % self._engine_label(),
+            bg=CARD if not banner else "#151726", fg=DIM,
+            font=("Segoe UI", 9), bd=0)
+        self.subtitle_lbl.place(x=text_x + 2, y=38)
+
+    def _make_drop_target(self, widget, handler):
+        """Register a widget so dropped .srt files load into the right field."""
+        if not self.dnd:
+            return
+        try:
+            from tkinterdnd2 import DND_FILES
+            widget.drop_target_register(DND_FILES)
+            widget.dnd_bind("<<Drop>>", handler)
+        except Exception:  # noqa: BLE001 - dropping is a nicety, never fatal
+            pass
+
+    @staticmethod
+    def _first_srt(event):
+        paths = parse_drop(getattr(event, "data", ""))
+        for p in paths:
+            if p.lower().endswith(".srt") and os.path.isfile(p):
+                return p
+        return paths[0] if paths else None
+
+    def _drop_translate(self, event):
+        path = self._first_srt(event)
+        if path:
+            self.input_var.set(path)
+            self.status_var.set("Loaded: %s" % os.path.basename(path))
+            self._note_video_for(path)
+
+    def _drop_colour(self, event):
+        path = self._first_srt(event)
+        if path:
+            self.colour_input.set(path)
+            self.colour_status.set("Loaded: %s" % os.path.basename(path))
+
+    # ----- video auto-detect -------------------------------------------------
+
+    VIDEO_EXTS = (".mkv", ".mp4", ".avi", ".mov", ".m4v", ".wmv", ".webm", ".ts")
+
+    def find_video_for(self, srt_path):
+        """Find the movie file this subtitle belongs to, in the same folder.
+
+        Prefers the video whose name best matches the subtitle's name, so a
+        season folder picks the right episode rather than the first file.
+        """
+        folder = os.path.dirname(os.path.abspath(srt_path))
+        stem = os.path.basename(srt_path)
+        for suffix in (".si.srt", ".srt"):
+            if stem.lower().endswith(suffix):
+                stem = stem[: -len(suffix)]
+                break
+        stem_l = stem.lower()
+        best, best_score = None, 0
+        try:
+            entries = os.listdir(folder)
+        except OSError:
+            return None
+        for name in entries:
+            if not name.lower().endswith(self.VIDEO_EXTS):
+                continue
+            vstem = os.path.splitext(name)[0].lower()
+            if vstem == stem_l:
+                return os.path.join(folder, name)
+            score = len(os.path.commonprefix([vstem, stem_l]))
+            if score > best_score:
+                best, best_score = os.path.join(folder, name), score
+        return best if best_score >= 4 else None
+
+    def _note_video_for(self, srt_path):
+        video = self.find_video_for(srt_path)
+        if video:
+            self.video_var.set("Movie found: %s" % os.path.basename(video))
+        else:
+            self.video_var.set("")
+
+    # ----- Batch tab --------------------------------------------------------
+
+    def _build_batch_tab(self, parent):
+        ttk.Label(parent, text="Translate every subtitle in a folder",
+                  style="Dim.TLabel", wraplength=680).pack(anchor="w")
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=(8, 0))
+        ttk.Label(row, text="Folder:").pack(side="left")
+        self.batch_dir = tk.StringVar()
+        ttk.Entry(row, textvariable=self.batch_dir).pack(
+            side="left", fill="x", expand=True, padx=8)
+        ttk.Button(row, text="Browse...", command=self._batch_browse).pack(side="left")
+
+        opts = ttk.Frame(parent)
+        opts.pack(fill="x", pady=(10, 0))
+        self.batch_recursive = tk.BooleanVar(value=True)
+        ttk.Checkbutton(opts, text="Include sub-folders (whole season)",
+                        variable=self.batch_recursive).pack(side="left")
+        self.batch_skip_done = tk.BooleanVar(value=True)
+        ttk.Checkbutton(opts, text="Skip files already translated",
+                        variable=self.batch_skip_done).pack(side="left", padx=18)
+
+        act = ttk.Frame(parent)
+        act.pack(fill="x", pady=(12, 0))
+        self.batch_btn = ttk.Button(act, text="Translate all", style="Accent.TButton",
+                                    command=self.start_batch)
+        self.batch_btn.pack(side="left")
+        ttk.Button(act, text="Scan", command=self._batch_scan).pack(side="left", padx=8)
+
+        self.batch_progress = ttk.Progressbar(parent, mode="determinate")
+        self.batch_progress.pack(fill="x", pady=(12, 0))
+        self.batch_status = tk.StringVar(value="Pick a folder of .srt files.")
+        ttk.Label(parent, textvariable=self.batch_status, style="Dim.TLabel",
+                  wraplength=680).pack(anchor="w", pady=(8, 0))
+
+        self.batch_list = tk.Listbox(
+            parent, height=8, bg=FIELD, fg=TEXT, selectbackground=ACCENT,
+            relief="flat", highlightthickness=0, borderwidth=0,
+            font=("Segoe UI", 9))
+        self.batch_list.pack(fill="both", expand=True, pady=(10, 0))
+
+    def _batch_browse(self):
+        path = filedialog.askdirectory(title="Choose a folder of subtitles")
+        if path:
+            self.batch_dir.set(path)
+            self._batch_scan()
+
+    def _batch_files(self):
+        root_dir = self.batch_dir.get().strip()
+        if not root_dir or not os.path.isdir(root_dir):
+            return []
+        found = []
+        walker = (os.walk(root_dir) if self.batch_recursive.get()
+                  else [(root_dir, [], os.listdir(root_dir))])
+        for folder, _dirs, names in walker:
+            for name in sorted(names):
+                if not name.lower().endswith(".srt"):
+                    continue
+                if name.lower().endswith(".si.srt"):
+                    continue  # already a Sinhala output
+                full = os.path.join(folder, name)
+                if self.batch_skip_done.get() and os.path.exists(
+                        default_output_path(full)):
+                    continue
+                found.append(full)
+        return found
+
+    def _batch_scan(self):
+        files = self._batch_files()
+        self.batch_list.delete(0, "end")
+        for f in files:
+            self.batch_list.insert("end", os.path.basename(f))
+        self.batch_status.set("%d file(s) to translate." % len(files))
+
+    def start_batch(self):
+        files = self._batch_files()
+        if not files:
+            messagebox.showinfo("SinhalaSub", "Nothing to translate in that folder.")
+            return
+        provider = providers.build_active_provider(
+            self.settings, cli_path=self.claude_path)
+        if not provider.available():
+            self._update_translate_gate()
+            return
+        if not messagebox.askyesno(
+                "Batch translate",
+                "Translate %d subtitle file(s) with %s?\n\nThe app will work through "
+                "them one by one and save each result next to its input."
+                % (len(files), self._engine_label())):
+            return
+        self.cancel_event = threading.Event()
+        self.batch_btn.state(["disabled"])
+        self.batch_progress.configure(maximum=len(files), value=0)
+        threading.Thread(target=self._batch_worker,
+                         args=(files, provider), daemon=True).start()
+
+    def _batch_worker(self, files, provider):
+        try:
+            workers = max(1, min(20, int(self.workers_var.get())))
+        except ValueError:
+            workers = providers.default_workers(self.provider_key)
+        done = 0
+        for path in files:
+            if self.cancel_event.is_set():
+                break
+            self.msgs.put(("batch_status", "Translating %s (%d/%d)"
+                           % (os.path.basename(path), done + 1, len(files))))
+            try:
+                subs = load_srt(path)
+                texts = translate_all(subs, provider, workers=workers,
+                                      cancel=self.cancel_event)
+                if self.color_hex:
+                    texts = [colorize.colour_line(t, self.color_hex) for t in texts]
+                write_output(subs, texts, unused_path(default_output_path(path)))
+            except TranslationCancelled:
+                break
+            except Exception as exc:  # noqa: BLE001 - keep going through the list
+                self.msgs.put(("batch_status", "Failed on %s: %s"
+                               % (os.path.basename(path), str(exc)[:120])))
+                continue
+            done += 1
+            self.msgs.put(("batch_progress", done))
+        self.msgs.put(("batch_done", done, len(files)))
+
+    # ----- Timing tab -------------------------------------------------------
+
+    def _build_timing_tab(self, parent):
+        ttk.Label(parent, text="Shift subtitle timing when it runs early or late",
+                  style="Dim.TLabel", wraplength=680).pack(anchor="w")
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=(8, 0))
+        ttk.Label(row, text="Subtitle .srt:").pack(side="left")
+        self.timing_input = tk.StringVar()
+        ttk.Entry(row, textvariable=self.timing_input).pack(
+            side="left", fill="x", expand=True, padx=8)
+        ttk.Button(row, text="Browse...",
+                   command=self._timing_browse).pack(side="left")
+
+        ctl = ttk.Frame(parent)
+        ctl.pack(fill="x", pady=(12, 0))
+        ttk.Label(ctl, text="Shift by (seconds)", style="Dim.TLabel").pack(side="left")
+        self.shift_var = tk.StringVar(value="0.0")
+        ttk.Entry(ctl, textvariable=self.shift_var, width=10).pack(side="left", padx=8)
+        for label, delta in (("-1s", -1), ("-0.5s", -0.5), ("+0.5s", 0.5), ("+1s", 1)):
+            ttk.Button(ctl, text=label, style="Small.TButton",
+                       command=lambda d=delta: self._bump_shift(d)).pack(
+                side="left", padx=2)
+
+        ttk.Label(parent, style="Dim.TLabel", wraplength=680,
+                  text="Positive numbers make the subtitles appear later, negative "
+                       "makes them appear earlier. The result is saved as a new file, "
+                       "your original is never changed.").pack(anchor="w", pady=(10, 0))
+
+        act = ttk.Frame(parent)
+        act.pack(fill="x", pady=(12, 0))
+        ttk.Button(act, text="Apply shift & save", style="Accent.TButton",
+                   command=self.apply_shift).pack(side="left")
+        self.timing_status = tk.StringVar(value="Pick a subtitle to retime.")
+        ttk.Label(parent, textvariable=self.timing_status, style="Dim.TLabel",
+                  wraplength=680).pack(anchor="w", pady=(8, 0))
+
+    def _timing_browse(self):
+        path = filedialog.askopenfilename(
+            title="Choose a subtitle to retime",
+            filetypes=[("SubRip subtitles", "*.srt"), ("All files", "*.*")])
+        if path:
+            self.timing_input.set(path)
+
+    def _bump_shift(self, delta):
+        try:
+            current = float(self.shift_var.get())
+        except ValueError:
+            current = 0.0
+        self.shift_var.set("%.1f" % (current + delta))
+
+    def apply_shift(self):
+        path = self.timing_input.get().strip()
+        if not path or not os.path.isfile(path):
+            messagebox.showerror("SinhalaSub", "Choose an existing .srt file first.")
+            return
+        try:
+            seconds = float(self.shift_var.get())
+        except ValueError:
+            messagebox.showerror("SinhalaSub", "Shift must be a number, e.g. 2.5")
+            return
+        if not seconds:
+            self.timing_status.set("Shift is zero - nothing to change.")
+            return
+        try:
+            subs = load_srt(path)
+            subs.shift(seconds=seconds)
+            base = path[:-4] if path.lower().endswith(".srt") else path
+            out = unused_path("%s.shifted.srt" % base)
+            subs.save(out, encoding="utf-8")
+        except Exception as exc:
+            messagebox.showerror("SinhalaSub", "Could not retime that file:\n%s" % exc)
+            return
+        self.timing_status.set("Saved: %s" % out)
+        messagebox.showinfo("SinhalaSub", "Shifted by %+.1fs\n\nSaved:\n%s"
+                            % (seconds, out))
 
     # ----- Colour & Style tab ----------------------------------------------
 
@@ -1282,6 +1720,7 @@ class SinhalaSubApp:
             filetypes=[("SubRip subtitles", "*.srt"), ("All files", "*.*")])
         if path:
             self.input_var.set(path)
+            self._note_video_for(path)
 
     def start_translate(self):
         path = self.input_var.get().strip()
@@ -1429,6 +1868,15 @@ class SinhalaSubApp:
                     self._busy(False)
                     self.status_var.set(str(msg[1]))
                     messagebox.showerror("SinhalaSub", str(msg[1]))
+                elif kind == "batch_status":
+                    self.batch_status.set(str(msg[1]))
+                elif kind == "batch_progress":
+                    self.batch_progress.configure(value=msg[1])
+                elif kind == "batch_done":
+                    self.batch_btn.state(["!disabled"])
+                    self.batch_status.set(
+                        "Finished %d of %d file(s)." % (msg[1], msg[2]))
+                    self._batch_scan()
                 elif kind == "os_results":
                     self._os_fill(msg[1])
                 elif kind == "os_saved":
@@ -1601,9 +2049,44 @@ class SinhalaSubApp:
         threading.Thread(target=work, daemon=True).start()
 
 
+def make_root():
+    """Root window with file drag-and-drop when tkinterdnd2 is installed."""
+    try:
+        from tkinterdnd2 import TkinterDnD
+        return TkinterDnD.Tk(), True
+    except Exception:  # noqa: BLE001 - plain Tk still works, just no dropping
+        return tk.Tk(), False
+
+
+def parse_drop(data):
+    """Turn a drag-and-drop payload into a list of paths.
+
+    Tk hands paths over as a single string with {braces} around any path that
+    contains spaces, which is common for movie folders.
+    """
+    paths, buf, in_brace = [], "", False
+    for ch in data or "":
+        if ch == "{":
+            in_brace = True
+        elif ch == "}":
+            in_brace = False
+            if buf.strip():
+                paths.append(buf.strip())
+            buf = ""
+        elif ch == " " and not in_brace:
+            if buf.strip():
+                paths.append(buf.strip())
+            buf = ""
+        else:
+            buf += ch
+    if buf.strip():
+        paths.append(buf.strip())
+    return paths
+
+
 def main():
-    root = tk.Tk()
-    SinhalaSubApp(root)
+    root, dnd = make_root()
+    SinhalaSubApp(root, dnd_available=dnd)
     root.mainloop()
 
 

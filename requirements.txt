@@ -1,3 +1,5 @@
 pysrt
 requests
 deep-translator
+pillow
+tkinterdnd2

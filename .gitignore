@@ -5,3 +5,8 @@ __pycache__/
 translations.db
 settings.json
 secrets.json
+*.coloured.srt
+*.shifted.srt
+*.si.srt
+.pytest_cache/
+tests/__pycache__/
