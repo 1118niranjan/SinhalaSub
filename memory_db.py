@@ -119,6 +119,35 @@ class MemoryDB:
             con.close()
         return found
 
+    def lookup_detailed(self, sources, min_tier=None):
+        """Like lookup(), but returns {source: (sinhala, tier)}.
+
+        The caller needs the tier to decide whether a long line is trustworthy
+        enough to reuse, which depends on what produced it.
+        """
+        sources = [s for s in dict.fromkeys(sources) if s]
+        if not sources:
+            return {}
+        floor = tier_rank(min_tier) if min_tier else 0
+        found = {}
+        con = self._con()
+        try:
+            for start in range(0, len(sources), 400):
+                chunk = sources[start:start + 400]
+                marks = ",".join("?" * len(chunk))
+                for row in con.execute(
+                        "SELECT source, sinhala, tier FROM lines"
+                        " WHERE source IN (%s) AND rank >= ?" % marks,
+                        chunk + [floor]):
+                    found[row["source"]] = (row["sinhala"], row["tier"])
+                for row in con.execute(
+                        "SELECT source, sinhala FROM corrections"
+                        " WHERE source IN (%s)" % marks, chunk):
+                    found[row["source"]] = (row["sinhala"], "correction")
+        finally:
+            con.close()
+        return found
+
     def store(self, pairs, engine="", tier=DEFAULT_TIER):
         """Insert or upgrade lines; never downgrades a better existing entry."""
         if not pairs:

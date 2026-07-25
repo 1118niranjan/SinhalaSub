@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import time
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -159,6 +160,11 @@ class HybridProvider(Provider):
         self.model = "hybrid"
         self.polish_disabled = False    # set once the allowance is exhausted
         self.polished = 0
+        # Source lines the better engine actually handled. The app stores these
+        # at LLM quality so a later free run can reuse them instead of paying
+        # for the same hard line twice. Batches run in threads, hence the lock.
+        self.polished_sources = set()
+        self._lock = threading.Lock()
 
     def available(self):
         # The fast engine alone is enough to produce a complete file.
@@ -201,12 +207,18 @@ class HybridProvider(Provider):
         sub_stdin += "".join("%s|||%s\n" % (n, s) for n, s in hard)
         try:
             out = self.good.translate(prompt, sub_stdin, timeout)
+            by_num = dict(hard)
+            got = set()
             for line in out.splitlines():
                 num, _, body = line.partition("|||")
                 num, body = num.strip(), body.strip()
                 if num.isdigit() and body:
                     merged[num] = body
-            self.polished += len(hard)
+                    got.add(num)
+            with self._lock:
+                self.polished += len(got)
+                # Record the English sources the LLM genuinely translated.
+                self.polished_sources.update(by_num[n] for n in got if n in by_num)
         except Exception as exc:  # noqa: BLE001 - the fast result still stands
             msg = str(exc).lower()
             if any(sig in msg for sig in self._EXHAUSTED):

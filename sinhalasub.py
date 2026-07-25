@@ -430,9 +430,17 @@ def get_memory():
     return memory_db.MemoryDB(DB_PATH)
 
 
-def memory_reusable(source):
-    """Only short stock phrases and [sound cues] are safe to reuse blindly."""
-    return bool(BRACKET_RE.match(source)) or len(source.split()) <= MEMORY_MAX_WORDS
+def memory_reusable(source, tier="machine"):
+    """Whether a remembered line can be reused for this cue.
+
+    Short stock phrases ("Yeah.", "Okay.") and [sound cues] are safe whatever
+    produced them. Longer lines depend on scene and tone, so a cheap machine
+    translation of one is not trusted - but a line an LLM already worked out, or
+    one you corrected by hand, is exactly what should come back free next time.
+    """
+    if BRACKET_RE.match(source) or len(source.split()) <= MEMORY_MAX_WORDS:
+        return True
+    return memory_db.tier_rank(tier) >= memory_db.tier_rank("llm")
 
 
 def memory_prefill(subs, min_tier=None):
@@ -443,9 +451,9 @@ def memory_prefill(subs, min_tier=None):
     quietly drag a careful pass back down to the quality of the fastest one.
     """
     flat = [flatten(c.text) for c in subs]
-    found = get_memory().lookup(flat, min_tier=min_tier)
-    return {i: found[f] for i, f in enumerate(flat)
-            if f in found and memory_reusable(f)}
+    found = get_memory().lookup_detailed(flat, min_tier=min_tier)
+    return {i: found[f][0] for i, f in enumerate(flat)
+            if f in found and memory_reusable(f, found[f][1])}
 
 
 def memory_collect(subs, texts):
@@ -2026,8 +2034,19 @@ class SinhalaSubApp:
         if pairs:
             try:
                 mem = get_memory()
-                total = mem.store(pairs, engine=self.provider_key,
-                                  tier=memory_db.engine_tier(self.provider_key))
+                base_tier = memory_db.engine_tier(self.provider_key)
+                # A hybrid run mixes machine and LLM output. Store each line at
+                # the quality that actually produced it, so the hard lines the
+                # LLM solved come back free on later runs and the cheap ones do
+                # not masquerade as high quality.
+                polished = getattr(self.provider, "polished_sources", None) or set()
+                if polished:
+                    llm_pairs = {s: t for s, t in pairs.items() if s in polished}
+                    rest = {s: t for s, t in pairs.items() if s not in polished}
+                    mem.store(llm_pairs, engine=self.provider_key + "+llm", tier="llm")
+                    total = mem.store(rest, engine=self.provider_key, tier=base_tier)
+                else:
+                    total = mem.store(pairs, engine=self.provider_key, tier=base_tier)
                 mem.record_run(src, engine=self.provider_key, cues=len(self.subs),
                                seconds=(time.time() - self.t_start)
                                if self.t_start else 0)
