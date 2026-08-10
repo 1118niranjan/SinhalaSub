@@ -1337,7 +1337,10 @@ class SinhalaSubApp:
         except Exception:  # noqa: BLE001
             messagebox.showinfo("SinhalaSub", folder)
 
-    DONATE_EMAIL = "1118niranjan@gmail.com"
+    # Contact goes through GitHub rather than an address in the app, so no email
+    # is exposed to anyone reading the source or scraping the repository.
+    PROJECT_URL = "https://github.com/1118niranjan/SinhalaSub"
+    ISSUES_URL = "https://github.com/1118niranjan/SinhalaSub/issues"
 
     def show_about(self):
         win = tk.Toplevel(self.root)
@@ -1366,18 +1369,15 @@ class SinhalaSubApp:
                        "Certification Course in SLIPD Academy.").pack()
 
         ttk.Separator(frm, orient="horizontal").pack(fill="x", pady=14)
-        ttk.Label(frm, text="Contact", style="Dim.TLabel").pack()
-        ttk.Label(frm, text=self.DONATE_EMAIL,
-                  font=("Segoe UI Semibold", 11)).pack(pady=(4, 0))
-        ttk.Button(frm, text="Copy email",
-                   command=self._copy_email).pack(pady=(10, 0))
-        ttk.Button(frm, text="Close", command=win.destroy).pack(pady=(14, 0))
-
-    def _copy_email(self):
-        self.root.clipboard_clear()
-        self.root.clipboard_append(self.DONATE_EMAIL)
-        messagebox.showinfo("Copied", "%s copied to the clipboard."
-                            % self.DONATE_EMAIL)
+        ttk.Label(frm, text="Questions, bugs or ideas", style="Dim.TLabel").pack()
+        links = ttk.Frame(frm)
+        links.pack(pady=(8, 0))
+        ttk.Button(links, text="Project on GitHub", style="Accent.TButton",
+                   command=lambda: webbrowser.open(self.PROJECT_URL)).pack(side="left")
+        ttk.Button(links, text="Report an issue",
+                   command=lambda: webbrowser.open(self.ISSUES_URL)).pack(
+            side="left", padx=8)
+        ttk.Button(frm, text="Close", command=win.destroy).pack(pady=(16, 0))
 
     # Where each provider hands out an API key (opened by the "Get a key" button).
     KEY_URLS = {

@@ -216,11 +216,11 @@ Interrupted runs resume: progress is checkpointed to `<name>.si.partial.json` af
 
 **Created by NLK**
 
-Questions, bugs or ideas — get in touch:
+*This is my Python project for the Advanced Python Certification Course in SLIPD Academy.*
 
-**`1118niranjan@gmail.com`**
+Questions, bugs or ideas? [**Open an issue**](https://github.com/1118niranjan/SinhalaSub/issues) — that's the best way to reach me.
 
-<sub>Also shown in the app under <b>About</b></sub>
+<sub>Also linked in the app under <b>About</b></sub>
 
 </div>
 
