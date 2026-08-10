@@ -13,3 +13,7 @@ tests/__pycache__/
 
 # Tests are kept locally for development but not published
 tests/
+
+# Claude Code context - travels with the folder, not with GitHub
+CLAUDE.md
+.claude/
