@@ -914,8 +914,7 @@ class SinhalaSubApp:
         ttk.Label(lang_row, text="→  සිංහල", style="Dim.TLabel").pack(side="left")
         self.lang_var.trace_add("write", self._on_lang_change)
 
-        if self.os_key:
-            self._build_opensubtitles(main)
+        self._build_opensubtitles(main)
 
         opts2 = ttk.Frame(main)
         opts2.pack(fill="x", pady=(12, 0))
@@ -1089,8 +1088,7 @@ class SinhalaSubApp:
                 sec.pop("opensubtitles", None)
             providers.save_secrets(sec)
             self.os_key = val or opensubtitles_key()
-            if self.os_key and self._os_panel is None:
-                self._build_opensubtitles(self.main)
+            self._refresh_opensubtitles()
             win.destroy()
 
         btns = ttk.Frame(frm)
@@ -1564,8 +1562,7 @@ class SinhalaSubApp:
                 del sec["opensubtitles"]
             providers.save_secrets(sec)
             self.os_key = os_val or opensubtitles_key()
-            if self.os_key and self._os_panel is None:
-                self._build_opensubtitles(self.main)
+            self._refresh_opensubtitles()
             self._save_glossary(gloss.get("1.0", "end"))
             self._persist()
             self._menu_provider.set(d["key"])
@@ -2341,12 +2338,42 @@ class SinhalaSubApp:
         self.colour_status.set("Saved: %s" % out)
         messagebox.showinfo("SinhalaSub", "Saved:\n%s" % out)
 
+    def _refresh_opensubtitles(self):
+        """Rebuild the panel after a key is added or removed."""
+        if self._os_panel is not None:
+            self._os_panel.destroy()
+            self._os_panel = None
+        self._build_opensubtitles(self.main)
+
     def _build_opensubtitles(self, parent):
+        """The film-search panel.
+
+        Shown whether or not a key is set: hiding it entirely meant nobody
+        discovered the feature existed. Without a key it explains what the panel
+        does and offers to add one.
+        """
         if self._os_panel is not None:
             return
-        box = ttk.LabelFrame(parent, text=" OpenSubtitles search (optional) ", padding=10)
+        box = ttk.LabelFrame(parent, text=" Find a subtitle online (optional) ",
+                             padding=10)
         box.pack(fill="x", pady=(12, 0))
         self._os_panel = box
+
+        if not self.os_key:
+            ttk.Label(box, style="Dim.TLabel", wraplength=640,
+                      text="Don't have a subtitle file yet? Search OpenSubtitles by "
+                           "film name and download one, right here. It needs a free "
+                           "OpenSubtitles key - it takes a minute to get.").pack(
+                anchor="w")
+            btns = ttk.Frame(box)
+            btns.pack(anchor="w", pady=(8, 0))
+            ttk.Button(btns, text="Add OpenSubtitles key",
+                       command=self.open_opensubtitles_key).pack(side="left")
+            ttk.Button(btns, text="Get a free key ↗",
+                       command=lambda: webbrowser.open(self.OS_KEY_URL)).pack(
+                side="left", padx=8)
+            return
+
         row = ttk.Frame(box)
         row.pack(fill="x")
         ttk.Label(row, text="Film", style="Dim.TLabel").pack(side="left")

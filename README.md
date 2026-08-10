@@ -8,7 +8,6 @@
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?logo=windows&logoColor=white)](#install)
-[![Tests](https://img.shields.io/badge/tests-175%20passing-4ade80)](#development)
 [![Cost](https://img.shields.io/badge/cost-free-4ade80)](#engines)
 [![License](https://img.shields.io/badge/license-MIT-7c6cff)](LICENSE)
 
@@ -50,6 +49,7 @@ SinhalaSub does both. A free engine handles the bulk in minutes, an LLM is spent
 | ✅ **Quality report** | Catches unreadable timing, bad wrapping, lines left untranslated |
 | 🎬 **Finds your movie** | Detects the matching video file automatically |
 | 🖱 **Drag & drop** | Drop an `.srt` straight onto the window |
+| 🔎 **Find subtitles online** | Search OpenSubtitles by film name and download, without leaving the app |
 
 ---
 
@@ -97,6 +97,20 @@ Pick one from the **Providers** menu. All settings live in **Providers → Setti
 Keys are stored in `secrets.json` (gitignored, owner-only permissions) and are never committed.
 
 </details>
+
+---
+
+## Finding a subtitle to translate
+
+No `.srt` yet? The **Translate** tab can search **OpenSubtitles** by film name and
+download one for you. It needs a free key:
+
+1. Sign up at [opensubtitles.com/en/consumers](https://www.opensubtitles.com/en/consumers) and create an API key
+2. In the app: **Tools → OpenSubtitles API key…** (or the **Add OpenSubtitles key** button on the Translate tab)
+3. Paste it, **Save** — the search box appears
+
+Type the film name and, if you know it, the year. Every result shows which film
+and year it belongs to, most-downloaded first — those are usually the best synced.
 
 ---
 
@@ -180,11 +194,6 @@ Also choose the **encoding** — some older TVs only detect UTF-8 when a **BOM**
 
 ## Development
 
-```bash
-pip install pytest
-python -m pytest -q        # 175 tests, no network needed
-```
-
 ```
 SinhalaSub/
 ├── main.py                  ← run this
@@ -192,7 +201,7 @@ SinhalaSub/
 ├── requirements.txt
 ├── assets/                  logo, icon, header artwork
 ├── docs/screenshots/        the images in this README
-├── sinhalasub/              all the application code
+└── sinhalasub/              all the application code
 │   ├── app.py               GUI, batching, checkpoints, orchestration
 │   ├── providers.py         the engines behind one interface
 │   ├── memory_db.py         translation memory, corrections, names, history
@@ -200,7 +209,6 @@ SinhalaSub/
 │   ├── colorize.py          cue classification and auto-colour
 │   ├── quality.py           subtitling checks (17 cps, 42 chars, 2 lines)
 │   └── subtitle_export.py   SRT / SUB / VTT / ASS / TXT writers
-└── tests/                   175 tests, no network needed
 ```
 
 Your own data — `settings.json`, `secrets.json`, `translations.db` — is created

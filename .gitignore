@@ -10,3 +10,6 @@ secrets.json
 *.si.srt
 .pytest_cache/
 tests/__pycache__/
+
+# Tests are kept locally for development but not published
+tests/
