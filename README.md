@@ -202,13 +202,13 @@ SinhalaSub/
 ├── assets/                  logo, icon, header artwork
 ├── docs/screenshots/        the images in this README
 └── sinhalasub/              all the application code
-│   ├── app.py               GUI, batching, checkpoints, orchestration
-│   ├── providers.py         the engines behind one interface
-│   ├── memory_db.py         translation memory, corrections, names, history
-│   ├── subtitle_text.py     sentence joining, markup handling, glossary
-│   ├── colorize.py          cue classification and auto-colour
-│   ├── quality.py           subtitling checks (17 cps, 42 chars, 2 lines)
-│   └── subtitle_export.py   SRT / SUB / VTT / ASS / TXT writers
+    ├── app.py               GUI, batching, checkpoints, orchestration
+    ├── providers.py         the engines behind one interface
+    ├── memory_db.py         translation memory, corrections, names, history
+    ├── subtitle_text.py     sentence joining, markup handling, glossary
+    ├── colorize.py          cue classification and auto-colour
+    ├── quality.py           subtitling checks (17 cps, 42 chars, 2 lines)
+    └── subtitle_export.py   SRT / SUB / VTT / ASS / TXT writers
 ```
 
 Your own data — `settings.json`, `secrets.json`, `translations.db` — is created
