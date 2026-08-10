@@ -1,4 +1,4 @@
-import memory_db as db
+from sinhalasub import memory_db as db
 
 
 def _open(tmp_path):

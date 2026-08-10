@@ -1,5 +1,5 @@
 """Quality behaviour of the Google Translate provider."""
-import providers
+from sinhalasub import providers
 
 
 class RecordingTranslator:

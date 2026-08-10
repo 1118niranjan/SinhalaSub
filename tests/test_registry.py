@@ -1,4 +1,4 @@
-import providers
+from sinhalasub import providers
 
 
 def test_providers_with_expected_keys():

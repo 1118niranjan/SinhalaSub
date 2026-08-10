@@ -12,7 +12,9 @@ import subprocess
 import threading
 import time
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
+from . import ROOT_DIR
+
+_HERE = ROOT_DIR  # secrets.json sits beside the app, not inside the package
 SECRETS_PATH = os.path.join(_HERE, "secrets.json")
 
 # On Windows the claude CLI is a .cmd shim; hide the console window it spawns.
@@ -383,7 +385,7 @@ class GoogleTranslateProvider(Provider):
         return targets
 
     def translate(self, prompt, stdin_text, timeout):
-        import subtitle_text as st
+        from . import subtitle_text as st
 
         targets = self._targets(stdin_text)
         if not targets:
@@ -510,10 +512,9 @@ def build_active_provider(settings, secrets=None, cli_path=None):
     # Names learned from earlier movies keep a character's spelling consistent;
     # anything the user typed explicitly still wins.
     try:
-        import memory_db
-        import os as _os
+        from . import memory_db
         gloss = memory_db.MemoryDB(
-            _os.path.join(_HERE, "translations.db")).glossary_with_names(gloss)
+            os.path.join(ROOT_DIR, "translations.db")).glossary_with_names(gloss)
     except Exception:  # noqa: BLE001 - the glossary is an enhancement, not a need
         pass
     source = settings.get("source_lang") or "auto"

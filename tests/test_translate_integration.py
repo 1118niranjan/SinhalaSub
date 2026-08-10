@@ -1,6 +1,6 @@
 import pysrt
 
-import sinhalasub
+from sinhalasub import app as sinhalasub
 
 
 class FakeProvider:

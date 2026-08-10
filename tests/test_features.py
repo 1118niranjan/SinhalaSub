@@ -3,7 +3,7 @@ import os
 
 import pysrt
 
-import sinhalasub
+from sinhalasub import app as sinhalasub
 
 
 # ----- drag and drop payloads ------------------------------------------------

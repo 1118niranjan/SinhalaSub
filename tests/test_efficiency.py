@@ -1,7 +1,7 @@
 """Token/time efficiency: skip untranslatable cues, translate duplicates once."""
 import pysrt
 
-import sinhalasub
+from sinhalasub import app as sinhalasub
 
 
 def _subs(texts):

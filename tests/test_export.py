@@ -1,6 +1,6 @@
 import pysrt
 
-import subtitle_export as ex
+from sinhalasub import subtitle_export as ex
 
 
 def _subs(items=None):

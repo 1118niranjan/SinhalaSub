@@ -1,4 +1,4 @@
-import providers
+from sinhalasub import providers
 
 
 class Fast:

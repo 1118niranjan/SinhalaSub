@@ -1,4 +1,4 @@
-import subtitle_text as st
+from sinhalasub import subtitle_text as st
 
 
 # ----- markup unwrap / rewrap ----------------------------------------------

@@ -1,9 +1,9 @@
 """Hard lines translated by an LLM must be reusable on later free runs."""
 import pysrt
 
-import memory_db
-import providers
-import sinhalasub
+from sinhalasub import memory_db
+from sinhalasub import providers
+from sinhalasub import app as sinhalasub
 
 
 HARD = ("He told me that the entire arrangement had collapsed, long before "

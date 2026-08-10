@@ -1,7 +1,7 @@
 """OpenSubtitles search must make it obvious which film each result is."""
 import requests
 
-import sinhalasub
+from sinhalasub import app as sinhalasub
 
 
 def _item(movie, year, release, downloads=0, file_id=1, ftype="Movie", lang="en"):

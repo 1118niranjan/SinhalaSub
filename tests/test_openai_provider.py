@@ -1,6 +1,6 @@
 import requests
 
-import providers
+from sinhalasub import providers
 from tests.conftest import make_response
 
 

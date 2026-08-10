@@ -14,6 +14,8 @@
 
 *A desktop app that reads an `.srt`, understands the scene, and writes Sinhala a native speaker actually says — then remembers everything it learns.*
 
+**My Python project for the Advanced Python Certification Course at SLIPD Academy.**
+
 <img src="docs/screenshots/01-translate.png" width="820" alt="SinhalaSub main window">
 
 </div>
@@ -54,10 +56,10 @@ SinhalaSub does both. A free engine handles the bulk in minutes, an LLM is spent
 ## Install
 
 ```bash
-git clone https://github.com/<your-user>/SinhalaSub.git
+git clone https://github.com/1118niranjan/SinhalaSub.git
 cd SinhalaSub
 pip install -r requirements.txt
-python sinhalasub.py
+python main.py
 ```
 
 Requires **Windows** and **Python 3.11+**. Double-click **`SinhalaSub.pyw`** to launch without a console window.
@@ -183,15 +185,26 @@ pip install pytest
 python -m pytest -q        # 175 tests, no network needed
 ```
 
-| File | What it does |
-|---|---|
-| `sinhalasub.py` | GUI, batching, checkpoints, orchestration |
-| `providers.py` | The engines behind one interface |
-| `memory_db.py` | Translation memory, corrections, names, history |
-| `subtitle_text.py` | Sentence joining, markup handling, glossary |
-| `colorize.py` | Cue classification and auto-colour |
-| `quality.py` | Subtitling checks (17 cps, 42 chars, 2 lines) |
-| `subtitle_export.py` | SRT / SUB / VTT / ASS / TXT writers |
+```
+SinhalaSub/
+├── main.py                  ← run this
+├── SinhalaSub.pyw           ← or double-click this (no console window)
+├── requirements.txt
+├── assets/                  logo, icon, header artwork
+├── docs/screenshots/        the images in this README
+├── sinhalasub/              all the application code
+│   ├── app.py               GUI, batching, checkpoints, orchestration
+│   ├── providers.py         the engines behind one interface
+│   ├── memory_db.py         translation memory, corrections, names, history
+│   ├── subtitle_text.py     sentence joining, markup handling, glossary
+│   ├── colorize.py          cue classification and auto-colour
+│   ├── quality.py           subtitling checks (17 cps, 42 chars, 2 lines)
+│   └── subtitle_export.py   SRT / SUB / VTT / ASS / TXT writers
+└── tests/                   175 tests, no network needed
+```
+
+Your own data — `settings.json`, `secrets.json`, `translations.db` — is created
+next to `main.py` on first run and is **never** committed (see `.gitignore`).
 
 Interrupted runs resume: progress is checkpointed to `<name>.si.partial.json` after every batch.
 

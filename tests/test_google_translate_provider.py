@@ -1,4 +1,4 @@
-import providers
+from sinhalasub import providers
 
 
 class FakeBatchTranslator:
@@ -41,7 +41,7 @@ def test_translates_only_the_translate_section(monkeypatch):
 
 def test_output_parses_with_the_existing_response_parser(monkeypatch):
     monkeypatch.setattr(providers, "_google_translator_cls", lambda: FakeBatchTranslator)
-    import sinhalasub
+    from sinhalasub import app as sinhalasub
     prov = providers.GoogleTranslateProvider()
     stdin = "TRANSLATE (1 lines):\n5|||Some line\n"
     out = prov.translate("P", stdin, 60)

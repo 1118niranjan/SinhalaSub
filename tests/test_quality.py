@@ -1,6 +1,6 @@
 import pysrt
 
-import quality
+from sinhalasub import quality
 
 
 def _cue(text, start_s, end_s, index=1):

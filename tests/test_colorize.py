@@ -1,4 +1,4 @@
-import colorize
+from sinhalasub import colorize
 
 
 def test_plain_colour_wraps_whole_line():

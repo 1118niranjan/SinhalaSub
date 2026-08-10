@@ -27,13 +27,10 @@ from tkinter import colorchooser, filedialog, messagebox, ttk
 
 import pysrt
 
-import colorize
-import memory_db
-import providers
-import quality
-import subtitle_export
+from . import (ROOT_DIR, __version__, colorize, memory_db, providers,
+               quality, subtitle_export)
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
+_HERE = ROOT_DIR  # settings, database and assets sit beside the app
 
 
 def load_env_file(path=None):
@@ -1356,12 +1353,17 @@ class SinhalaSubApp:
         if logo:
             tk.Label(frm, image=logo, bd=0, bg=BG).pack()
         ttk.Label(frm, text="SinhalaSub", style="Title.TLabel").pack(pady=(8, 0))
-        ttk.Label(frm, text="Created by NLK", style="Dim.TLabel").pack()
+        ttk.Label(frm, text="Version %s  ·  Created by NLK" % __version__,
+                  style="Dim.TLabel").pack()
         ttk.Label(frm, style="Dim.TLabel", wraplength=420, justify="center",
                   text="Translate movie subtitles from any language into natural, "
                        "meaning-based spoken Sinhala. Free and fast with Google "
                        "Translate, or add an LLM for the hardest lines.").pack(
             pady=(12, 0))
+        ttk.Separator(frm, orient="horizontal").pack(fill="x", pady=12)
+        ttk.Label(frm, style="Dim.TLabel", wraplength=420, justify="center",
+                  text="This is my Python project for the Advanced Python "
+                       "Certification Course in SLIPD Academy.").pack()
 
         ttk.Separator(frm, orient="horizontal").pack(fill="x", pady=14)
         ttk.Label(frm, text="Contact", style="Dim.TLabel").pack()

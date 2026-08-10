@@ -1,7 +1,7 @@
 import subprocess
 import types
 
-import providers
+from sinhalasub import providers
 
 
 def _fake_completed(returncode=0, stdout="1|||හලෝ\n", stderr=""):

@@ -1,8 +1,8 @@
 """A failed request must never be written into a subtitle as a translation."""
 import pysrt
 
-import providers
-import sinhalasub
+from sinhalasub import providers
+from sinhalasub import app as sinhalasub
 
 
 ERROR_PAGE = ("Error 500 (Server Error)!!1500.That's an error.There was an error. "
