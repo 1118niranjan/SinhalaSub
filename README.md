@@ -8,9 +8,9 @@
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?logo=windows&logoColor=white)](#install)
-[![Tests](https://img.shields.io/badge/tests-145%20passing-4ade80)](#development)
+[![Tests](https://img.shields.io/badge/tests-175%20passing-4ade80)](#development)
 [![Cost](https://img.shields.io/badge/cost-free-4ade80)](#engines)
-[![Made by](https://img.shields.io/badge/made%20by-NLK-7c6cff)](#support)
+[![License](https://img.shields.io/badge/license-MIT-7c6cff)](LICENSE)
 
 *A desktop app that reads an `.srt`, understands the scene, and writes Sinhala a native speaker actually says — then remembers everything it learns.*
 
@@ -180,7 +180,7 @@ Also choose the **encoding** — some older TVs only detect UTF-8 when a **BOM**
 
 ```bash
 pip install pytest
-python -m pytest -q        # 145 tests, no network needed
+python -m pytest -q        # 175 tests, no network needed
 ```
 
 | File | What it does |
@@ -197,16 +197,22 @@ Interrupted runs resume: progress is checkpointed to `<name>.si.partial.json` af
 
 ---
 
-## Support
+## Contact
 
 <div align="center">
 
 **Created by NLK**
 
-If SinhalaSub saved you an afternoon, a small donation is genuinely appreciated 🙏
+Questions, bugs or ideas — get in touch:
 
-**PayPal → `1118niranjan@gmail.com`**
+**`1118niranjan@gmail.com`**
 
-<sub>Also in the app under <b>About → Donate</b></sub>
+<sub>Also shown in the app under <b>About</b></sub>
 
 </div>
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE). Free to use, change and share.
